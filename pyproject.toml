@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "metra-mcp-server"
+version = "0.1.0"
+description = "Model Context Protocol server for Metra (Chicago commuter rail) GTFS data"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+keywords = ["mcp", "metra", "gtfs", "transit", "trains", "chicago", "anthropic", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "mcp>=1.2.0,<1.25",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+    "gtfs-realtime-bindings>=1.0.0",
+    "protobuf>=4.0.0",
+    "starlette>=0.37.0",
+    "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+]
+
+[project.urls]
+Homepage = "https://metra.remote-mcp.dev"
+Repository = "https://github.com/oconnorbz/metra-mcp"
+Issues = "https://github.com/oconnorbz/metra-mcp/issues"
+
+[project.scripts]
+metra-mcp = "metra_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/metra_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/metra_mcp", "README.md", "LICENSE", "deploy"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

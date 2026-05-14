@@ -1,0 +1,38 @@
+[Unit]
+Description=Metra MCP Server
+After=network.target
+
+[Service]
+Type=simple
+# Required: get a token from https://metra.com/metra-gtfs-api
+Environment=METRA_API_TOKEN=replace-me
+
+# Optional: enables the /copilot web chat UI
+# Environment=ANTHROPIC_API_KEY=sk-ant-...
+
+# Optional: override stats DB location (default /var/lib/metra-mcp/stats.db)
+# Environment=METRA_STATS_DB=/var/lib/metra-mcp/stats.db
+
+# Optional: override the public URL the Anthropic API calls back to.
+# Auto-detected from request headers when running behind a reverse proxy.
+# Environment=METRA_PUBLIC_MCP_URL=https://metra.example.com/mcp
+
+Environment=MCP_HOST=0.0.0.0
+Environment=MCP_PORT=8080
+
+# Adjust paths to match your install
+ExecStart=/opt/metra-mcp/venv/bin/metra-mcp --http
+WorkingDirectory=/opt/metra-mcp
+Restart=always
+RestartSec=5
+
+# Hardening
+DynamicUser=yes
+StateDirectory=metra-mcp
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

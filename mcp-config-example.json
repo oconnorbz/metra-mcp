@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "metra-local": {
+      "command": "metra-mcp",
+      "env": {
+        "METRA_API_TOKEN": "YOUR_API_TOKEN_HERE"
+      }
+    },
+    "metra-remote": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://metra.remote-mcp.dev/mcp"]
+    }
+  }
+}
