@@ -875,23 +875,44 @@ def main():
                 ],
             }
 
-            try:
-                async with _httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers={
-                            "Content-Type": "application/json",
-                            "x-api-key": api_key,
-                            "anthropic-version": "2023-06-01",
-                            "anthropic-beta": "mcp-client-2025-04-04",
-                        },
-                        json=payload,
-                    )
-                data = resp.json()
-                return JSONResponse(data, status_code=resp.status_code)
-            except Exception as e:
-                logger.exception("Error proxying chat request")
-                return JSONResponse({"error": str(e)}, status_code=500)
+            # Retry transient connection/read failures to the Anthropic API
+            # (a brief blip — e.g. a service restart mid-request — would
+            # otherwise surface to the user as a hard 500).
+            headers = {
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": "mcp-client-2025-04-04",
+            }
+            last_exc: Exception | None = None
+            for attempt in range(3):
+                try:
+                    async with _httpx.AsyncClient(timeout=120.0) as client:
+                        resp = await client.post(
+                            "https://api.anthropic.com/v1/messages",
+                            headers=headers,
+                            json=payload,
+                        )
+                    return JSONResponse(resp.json(), status_code=resp.status_code)
+                except (
+                    _httpx.ConnectError,
+                    _httpx.ConnectTimeout,
+                    _httpx.ReadError,
+                    _httpx.RemoteProtocolError,
+                ) as e:
+                    # Transient transport error — back off briefly and retry.
+                    last_exc = e
+                    logger.warning("Chat proxy transport error (attempt %d/3): %s", attempt + 1, e)
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                except Exception as e:
+                    # Non-transient (e.g. bad payload) — don't retry.
+                    logger.exception("Error proxying chat request")
+                    return JSONResponse({"error": str(e)}, status_code=502)
+            logger.error("Chat proxy failed after retries: %s", last_exc)
+            return JSONResponse(
+                {"error": f"Upstream API unreachable: {last_exc}"},
+                status_code=502,
+            )
 
         routes.append(Route("/", endpoint=handle_docs))
         routes.append(Route("/copilot", endpoint=handle_copilot))
