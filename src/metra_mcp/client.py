@@ -4,9 +4,11 @@ Fetches and parses GTFS Realtime protobuf feeds for vehicle positions,
 trip updates (arrival predictions), and service alerts.
 """
 
+import asyncio
 import logging
 import os
 import ssl
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -41,6 +43,11 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://gtfspublic.metrarr.com/gtfs/public"
 
+# Metra refreshes these feeds roughly every 30–60s, so a short cache cuts
+# upstream load and latency (especially get_train_status, which hits all
+# three) without serving meaningfully stale data. Override with env var.
+_FEED_TTL_SEC = float(os.environ.get("METRA_RT_CACHE_TTL_SEC", "20"))
+
 
 class MetraRealtimeClient:
     """Client for Metra GTFS Realtime API."""
@@ -48,6 +55,11 @@ class MetraRealtimeClient:
     def __init__(self, api_token: str):
         self.api_token = api_token
         self._client: httpx.AsyncClient | None = None
+        # Per-endpoint parsed-feed cache: endpoint -> (monotonic_expiry, feed).
+        self._feed_cache: dict[str, tuple[float, gtfs_realtime_pb2.FeedMessage]] = {}
+        # Per-endpoint locks so concurrent callers for the same feed collapse
+        # into one upstream fetch instead of a thundering herd.
+        self._feed_locks: dict[str, asyncio.Lock] = {}
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -55,14 +67,33 @@ class MetraRealtimeClient:
         return self._client
 
     async def _fetch_feed(self, endpoint: str) -> gtfs_realtime_pb2.FeedMessage:
-        """Fetch and parse a GTFS Realtime protobuf feed."""
-        client = await self._get_client()
-        url = f"{BASE_URL}/{endpoint}"
-        resp = await client.get(url, params={"api_token": self.api_token})
-        resp.raise_for_status()
-        feed = gtfs_realtime_pb2.FeedMessage()
-        feed.ParseFromString(resp.content)
-        return feed
+        """Fetch and parse a GTFS Realtime protobuf feed, with a short TTL cache.
+
+        The cached FeedMessage is treated as read-only by callers (they derive
+        filtered dicts from it), so sharing one parsed object is safe.
+        """
+        now = time.monotonic()
+        cached = self._feed_cache.get(endpoint)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+
+        lock = self._feed_locks.setdefault(endpoint, asyncio.Lock())
+        async with lock:
+            # Re-check: another waiter may have refreshed while we blocked.
+            now = time.monotonic()
+            cached = self._feed_cache.get(endpoint)
+            if cached is not None and cached[0] > now:
+                return cached[1]
+
+            client = await self._get_client()
+            url = f"{BASE_URL}/{endpoint}"
+            resp = await client.get(url, params={"api_token": self.api_token})
+            resp.raise_for_status()
+            feed = gtfs_realtime_pb2.FeedMessage()
+            feed.ParseFromString(resp.content)
+            if _FEED_TTL_SEC > 0:
+                self._feed_cache[endpoint] = (time.monotonic() + _FEED_TTL_SEC, feed)
+            return feed
 
     async def get_positions(self, route_id: str | None = None) -> list[dict[str, Any]]:
         """Get real-time vehicle positions.

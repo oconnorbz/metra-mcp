@@ -17,6 +17,15 @@ Environment=METRA_API_TOKEN=replace-me
 # Auto-detected from request headers when running behind a reverse proxy.
 # Environment=METRA_PUBLIC_MCP_URL=https://metra.example.com/mcp
 
+# Comma-separated IPs/CIDRs allowed to set X-Forwarded-For / X-Real-IP /
+# CF-Connecting-IP. Defaults to loopback only. Add your reverse proxy /
+# cloudflared peer IPs here. Forwarding headers from any other peer are
+# ignored, preventing /stats source-IP spoofing.
+# Environment=METRA_TRUSTED_PROXIES=127.0.0.1,::1
+
+# Optional: background GTFS freshness check interval (default 21600s = 6h)
+# Environment=METRA_REFRESH_INTERVAL_SEC=21600
+
 Environment=MCP_HOST=0.0.0.0
 Environment=MCP_PORT=8080
 
@@ -25,6 +34,8 @@ ExecStart=/opt/metra-mcp/venv/bin/metra-mcp --http
 WorkingDirectory=/opt/metra-mcp
 Restart=always
 RestartSec=5
+# Give shutdown a moment to drain the stats write queue and close clients.
+TimeoutStopSec=10
 
 # Hardening
 DynamicUser=yes

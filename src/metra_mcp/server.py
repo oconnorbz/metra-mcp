@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import os
@@ -38,27 +39,94 @@ server = Server(
 
 _rt_client: MetraRealtimeClient | None = None
 _gtfs: GTFSData | None = None
+_init_lock = asyncio.Lock()
 
 
-def get_rt_client() -> MetraRealtimeClient:
+async def get_rt_client() -> MetraRealtimeClient:
     global _rt_client
-    if _rt_client is None:
-        api_token = os.environ.get("METRA_API_TOKEN", "")
-        if not api_token:
-            raise ValueError("METRA_API_TOKEN environment variable is required")
-        _rt_client = MetraRealtimeClient(api_token)
+    if _rt_client is not None:
+        return _rt_client
+    async with _init_lock:
+        if _rt_client is None:
+            api_token = os.environ.get("METRA_API_TOKEN", "")
+            if not api_token:
+                raise ValueError("METRA_API_TOKEN environment variable is required")
+            _rt_client = MetraRealtimeClient(api_token)
     return _rt_client
 
 
-def get_gtfs() -> GTFSData:
+async def get_gtfs() -> GTFSData:
     global _gtfs
-    if _gtfs is None:
-        _gtfs = GTFSData()
+    if _gtfs is not None:
+        return _gtfs
+    async with _init_lock:
+        if _gtfs is None:
+            _gtfs = GTFSData()
     return _gtfs
 
 
 def format_response(data: Any) -> str:
     return json.dumps(data, indent=2, default=str)
+
+
+# --- /api/chat abuse guards ---
+# The chat endpoint proxies to the Anthropic API on the server's own key, so
+# it must not be an open, unmetered relay. We cap request size, pin the model
+# server-side to an allowlist, and rate-limit per client IP.
+_CHAT_MODEL_ALLOWLIST = {
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5-20251001",
+}
+_CHAT_DEFAULT_MODEL = "claude-sonnet-4-5"
+_CHAT_MAX_TOKENS_CAP = 4096
+_CHAT_MAX_MESSAGES = 40
+_CHAT_MAX_BODY_BYTES = 256 * 1024
+# Sliding-window per-IP limiter: max requests per window.
+_CHAT_RATE_MAX = int(os.environ.get("METRA_CHAT_RATE_MAX", "20"))
+_CHAT_RATE_WINDOW_SEC = float(os.environ.get("METRA_CHAT_RATE_WINDOW_SEC", "60"))
+_chat_hits: dict[str, list[float]] = {}
+_chat_rate_lock = asyncio.Lock()
+
+
+async def _chat_rate_limited(ip: str) -> bool:
+    """Return True if this IP has exceeded the chat rate limit."""
+    import time as _time
+
+    now = _time.monotonic()
+    cutoff = now - _CHAT_RATE_WINDOW_SEC
+    async with _chat_rate_lock:
+        hits = [t for t in _chat_hits.get(ip, ()) if t > cutoff]
+        if len(hits) >= _CHAT_RATE_MAX:
+            _chat_hits[ip] = hits
+            return True
+        hits.append(now)
+        _chat_hits[ip] = hits
+        # Opportunistic cleanup so the dict doesn't grow unbounded.
+        if len(_chat_hits) > 10_000:
+            for k in [k for k, v in _chat_hits.items() if not v or v[-1] <= cutoff]:
+                _chat_hits.pop(k, None)
+    return False
+
+
+_STOP_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "stop_id": {"type": "string"},
+        "stop_name": {"type": "string"},
+        "stop_lat": {"type": "string"},
+        "stop_lon": {"type": "string"},
+    },
+}
+
+_ROUTE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "route_id": {"type": "string"},
+        "route_short_name": {"type": "string"},
+        "route_long_name": {"type": "string"},
+        "route_color": {"type": "string"},
+    },
+}
 
 
 @server.list_tools()
@@ -69,6 +137,14 @@ async def list_tools() -> list[Tool]:
             name="get_routes",
             description="List all Metra routes/lines (e.g. BNSF, UP-N, Metra Electric, etc.).",
             inputSchema={"type": "object", "properties": {}},
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "routes": {"type": "array", "items": _ROUTE_SCHEMA},
+                    "count": {"type": "integer"},
+                },
+                "required": ["routes", "count"],
+            },
         ),
         Tool(
             name="get_stops",
@@ -81,6 +157,14 @@ async def list_tools() -> list[Tool]:
                         "description": "Optional route ID to filter stops (e.g. 'BNSF', 'UP-N')",
                     },
                 },
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "stops": {"type": "array", "items": _STOP_SCHEMA},
+                    "count": {"type": "integer"},
+                },
+                "required": ["stops", "count"],
             },
         ),
         Tool(
@@ -95,6 +179,15 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["query"],
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "stops": {"type": "array", "items": _STOP_SCHEMA},
+                    "count": {"type": "integer"},
+                    "query": {"type": "string"},
+                },
+                "required": ["stops", "count", "query"],
             },
         ),
         Tool(
@@ -122,6 +215,17 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["route_id"],
             },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "route_id": {"type": "string"},
+                    "stop_id": {"type": ["string", "null"]},
+                    "direction": {"type": ["string", "null"]},
+                    "trips": {"type": "array"},
+                    "count": {"type": "integer"},
+                },
+                "required": ["route_id", "trips", "count"],
+            },
         ),
         Tool(
             name="get_next_trains",
@@ -145,11 +249,34 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["stop_id"],
             },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "stop_id": {"type": "string"},
+                    "stop_name": {"type": "string"},
+                    "upcoming_trains": {"type": "array"},
+                    "count": {"type": "integer"},
+                },
+                "required": ["stop_id", "upcoming_trains", "count"],
+            },
         ),
         Tool(
             name="refresh_schedule",
-            description="Force re-download of the GTFS static schedule data.",
+            description=(
+                "Force re-download of the GTFS static schedule data. "
+                "Normally not needed — the server refreshes automatically on "
+                "startup and daily, plus on cache miss. Use this only after "
+                "Metra publishes a known mid-day schedule change."
+            ),
             inputSchema={"type": "object", "properties": {}},
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string"},
+                    "message": {"type": "string"},
+                },
+                "required": ["status", "message"],
+            },
         ),
         Tool(
             name="get_train_positions",
@@ -162,6 +289,15 @@ async def list_tools() -> list[Tool]:
                         "description": "Optional route filter (e.g. 'BNSF', 'UP-N')",
                     },
                 },
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "positions": {"type": "array"},
+                    "count": {"type": "integer"},
+                    "route_filter": {"type": ["string", "null"]},
+                },
+                "required": ["positions", "count"],
             },
         ),
         Tool(
@@ -180,6 +316,16 @@ async def list_tools() -> list[Tool]:
                     },
                 },
             },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "trip_updates": {"type": "array"},
+                    "count": {"type": "integer"},
+                    "route_filter": {"type": ["string", "null"]},
+                    "trip_filter": {"type": ["string", "null"]},
+                },
+                "required": ["trip_updates", "count"],
+            },
         ),
         Tool(
             name="get_alerts",
@@ -192,6 +338,15 @@ async def list_tools() -> list[Tool]:
                         "description": "Optional route filter. If omitted, returns all alerts.",
                     },
                 },
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "alerts": {"type": "array"},
+                    "count": {"type": "integer"},
+                    "route_filter": {"type": ["string", "null"]},
+                },
+                "required": ["alerts", "count"],
             },
         ),
         Tool(
@@ -206,6 +361,17 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["route_id"],
+            },
+            outputSchema={
+                "type": "object",
+                "properties": {
+                    "route_id": {"type": "string"},
+                    "active_trains": {"type": "integer"},
+                    "positions": {"type": "array"},
+                    "delayed_trips": {"type": "array"},
+                    "alerts": {"type": "array"},
+                },
+                "required": ["route_id", "active_trains", "positions", "delayed_trips", "alerts"],
             },
         ),
     ]
@@ -246,7 +412,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
 
 
 async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
-    gtfs = get_gtfs()
+    gtfs = await get_gtfs()
 
     if name == "get_routes":
         await gtfs.ensure_loaded()
@@ -276,7 +442,20 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
 
     elif name == "get_schedule":
         await gtfs.ensure_loaded()
-        query_date = date.fromisoformat(args["date_str"]) if args.get("date_str") else None
+        date_str = args.get("date_str")
+        if date_str:
+            try:
+                query_date = date.fromisoformat(date_str)
+            except ValueError:
+                return CallToolResult(
+                    content=[TextContent(
+                        type="text",
+                        text=f"Invalid date_str '{date_str}'. Use YYYY-MM-DD.",
+                    )],
+                    isError=True,
+                )
+        else:
+            query_date = None
         schedule = gtfs.get_schedule(
             args["route_id"], args.get("stop_id"), args.get("direction"), query_date
         )
@@ -296,11 +475,7 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
         await gtfs.ensure_loaded()
         stop_id = args["stop_id"]
         trains = gtfs.get_next_trains(stop_id, args.get("route_id"), args.get("limit", 5))
-        stop_name = ""
-        for s in gtfs.search_stops(stop_id):
-            if s["stop_id"] == stop_id:
-                stop_name = s["stop_name"]
-                break
+        stop_name = gtfs.get_stop_name(stop_id)
         display_name = stop_name or stop_id
         return _tool_result(
             f"Found {len(trains)} upcoming trains at {display_name}.",
@@ -315,7 +490,7 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
         )
 
     elif name == "get_train_positions":
-        client = get_rt_client()
+        client = await get_rt_client()
         positions = await client.get_positions(args.get("route_id"))
         route_label = f" on {args['route_id']}" if args.get("route_id") else ""
         return _tool_result(
@@ -324,7 +499,7 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
         )
 
     elif name == "get_trip_updates":
-        client = get_rt_client()
+        client = await get_rt_client()
         updates = await client.get_trip_updates(args.get("route_id"), args.get("trip_id"))
         return _tool_result(
             f"Found {len(updates)} trip updates.",
@@ -337,7 +512,7 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
         )
 
     elif name == "get_alerts":
-        client = get_rt_client()
+        client = await get_rt_client()
         alerts_data = await client.get_alerts(args.get("route_id"))
         route_label = f" for {args['route_id']}" if args.get("route_id") else ""
         return _tool_result(
@@ -346,11 +521,14 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
         )
 
     elif name == "get_train_status":
-        client = get_rt_client()
+        client = await get_rt_client()
         route_id = args["route_id"]
-        positions = await client.get_positions(route_id)
-        updates = await client.get_trip_updates(route_id)
-        alerts_data = await client.get_alerts(route_id)
+        # Three independent realtime feeds — fetch concurrently.
+        positions, updates, alerts_data = await asyncio.gather(
+            client.get_positions(route_id),
+            client.get_trip_updates(route_id),
+            client.get_alerts(route_id),
+        )
         delayed_trips = []
         for u in updates:
             max_delay = 0
@@ -389,12 +567,38 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
 
 async def run_server():
     """Run the MCP server in stdio mode."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    finally:
+        if _rt_client is not None:
+            try:
+                await _rt_client.close()
+            except Exception:
+                logger.exception("Error closing realtime client")
+        stats.flush_stats()
+
+
+def _parse_trusted_proxies(spec: str) -> list[ipaddress._BaseNetwork]:
+    """Parse a comma-separated list of IPs/CIDRs into network objects.
+
+    Accepts bare IPs (treated as /32 or /128) and CIDR ranges. Invalid
+    entries are logged and skipped.
+    """
+    nets: list[ipaddress._BaseNetwork] = []
+    for raw in spec.split(","):
+        s = raw.strip()
+        if not s:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(s, strict=False))
+        except ValueError as e:
+            logger.warning("Ignoring invalid METRA_TRUSTED_PROXIES entry %r: %s", s, e)
+    return nets
 
 
 def main():
@@ -407,16 +611,45 @@ def main():
         from starlette.middleware import Middleware
         import uvicorn
 
+        # Fail fast on missing config rather than waiting for the first
+        # tool call to surface the error.
+        if not os.environ.get("METRA_API_TOKEN"):
+            raise SystemExit(
+                "METRA_API_TOKEN environment variable is required. "
+                "Get one at https://metra.com/metra-gtfs-api"
+            )
+
+        # IPs/CIDRs allowed to set X-Forwarded-For / X-Real-IP /
+        # CF-Connecting-IP. Defaults to loopback so a local reverse proxy
+        # (Caddy, cloudflared, nginx) Just Works while preventing direct
+        # callers from spoofing source IPs in /stats.
+        trusted_proxies = _parse_trusted_proxies(
+            os.environ.get("METRA_TRUSTED_PROXIES", "127.0.0.1,::1")
+        )
+
+        def _ip_in_trusted(addr: str) -> bool:
+            if not addr or not trusted_proxies:
+                return False
+            try:
+                parsed = ipaddress.ip_address(addr)
+            except ValueError:
+                return False
+            return any(parsed in net for net in trusted_proxies)
+
         routes = []
 
         def _ip_from_scope(scope) -> str:
+            client = scope.get("client")
+            peer = client[0] if client else ""
+            if not _ip_in_trusted(peer):
+                # Untrusted peer: ignore forwarding headers entirely.
+                return peer
             hdrs = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
             for h in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for"):
                 v = hdrs.get(h)
                 if v:
                     return v.split(",")[0].strip()
-            client = scope.get("client")
-            return client[0] if client else ""
+            return peer
 
         class RequestCtxMiddleware:
             def __init__(self, app):
@@ -514,6 +747,17 @@ def main():
             stats.record_dashboard_event("page_view", {"page": "stats"})
             return FileResponse(_stats_html, media_type="text/html")
 
+        async def handle_health(request):
+            """Liveness + basic readiness for reverse proxies / monitoring."""
+            gtfs_loaded = _gtfs is not None and _gtfs.loaded
+            return JSONResponse(
+                {
+                    "status": "ok",
+                    "gtfs_loaded": gtfs_loaded,
+                    "rt_client_initialized": _rt_client is not None,
+                }
+            )
+
         async def handle_stats_api(request):
             kind = request.path_params.get("kind", "summary")
             if kind == "summary":
@@ -549,21 +793,65 @@ def main():
                     {"error": "ANTHROPIC_API_KEY not configured on server"},
                     status_code=500,
                 )
+
+            # Rate-limit per client IP (resolved with proxy-spoof protection
+            # by RequestCtxMiddleware).
+            ctx = stats.get_ctx()
+            client_ip = (ctx.ip if ctx else None) or "unknown"
+            if await _chat_rate_limited(client_ip):
+                return JSONResponse(
+                    {"error": "Rate limit exceeded. Try again shortly."},
+                    status_code=429,
+                    headers={"Retry-After": str(int(_CHAT_RATE_WINDOW_SEC))},
+                )
+
+            # Reject oversized bodies before buffering/parsing them.
             try:
-                body = await request.json()
+                clen = int(request.headers.get("content-length", "0"))
+            except ValueError:
+                clen = 0
+            if clen > _CHAT_MAX_BODY_BYTES:
+                return JSONResponse({"error": "Request too large"}, status_code=413)
+
+            try:
+                raw = await request.body()
+            except Exception as e:
+                return JSONResponse({"error": f"Could not read body: {e}"}, status_code=400)
+            if len(raw) > _CHAT_MAX_BODY_BYTES:
+                return JSONResponse({"error": "Request too large"}, status_code=413)
+            try:
+                body = json.loads(raw)
             except Exception as e:
                 return JSONResponse({"error": f"Invalid JSON: {e}"}, status_code=400)
 
             messages = body.get("messages", [])
+            if not isinstance(messages, list) or not messages:
+                return JSONResponse({"error": "messages must be a non-empty list"}, status_code=400)
+            if len(messages) > _CHAT_MAX_MESSAGES:
+                return JSONResponse(
+                    {"error": f"Too many messages (max {_CHAT_MAX_MESSAGES})"},
+                    status_code=400,
+                )
             last_user = ""
             for m in reversed(messages):
                 if m.get("role") == "user":
                     c = m.get("content", "")
                     last_user = c if isinstance(c, str) else json.dumps(c)[:500]
                     break
+            # Pin model to the allowlist; ignore client-supplied unknowns so
+            # callers can't select an arbitrary/expensive model on our key.
+            requested_model = body.get("model", _CHAT_DEFAULT_MODEL)
+            model = requested_model if requested_model in _CHAT_MODEL_ALLOWLIST else _CHAT_DEFAULT_MODEL
+            # Cap output tokens regardless of what the client asked for.
+            try:
+                max_tokens = int(body.get("max_tokens", _CHAT_MAX_TOKENS_CAP))
+            except (TypeError, ValueError):
+                max_tokens = _CHAT_MAX_TOKENS_CAP
+            max_tokens = max(1, min(max_tokens, _CHAT_MAX_TOKENS_CAP))
+
             stats.record_dashboard_event("chat_query", {
                 "query": last_user,
-                "model": body.get("model", "claude-sonnet-4-5"),
+                "model": model,
                 "message_count": len(messages),
             })
 
@@ -574,8 +862,8 @@ def main():
                 public_mcp_url = f"{scheme}://{host}/mcp"
 
             payload = {
-                "model": body.get("model", "claude-sonnet-4-5"),
-                "max_tokens": body.get("max_tokens", 4096),
+                "model": model,
+                "max_tokens": max_tokens,
                 "system": body.get("system", ""),
                 "messages": messages,
                 "mcp_servers": [
@@ -608,16 +896,55 @@ def main():
         routes.append(Route("/", endpoint=handle_docs))
         routes.append(Route("/copilot", endpoint=handle_copilot))
         routes.append(Route("/stats", endpoint=handle_stats_page))
+        routes.append(Route("/health", endpoint=handle_health))
         routes.append(Route("/api/stats/{kind}", endpoint=handle_stats_api))
         routes.append(Route("/favicon.ico", endpoint=handle_favicon_ico))
         routes.append(Route("/favicon.png", endpoint=handle_favicon_png))
         routes.append(Route("/favicon.svg", endpoint=handle_favicon_png))
         routes.append(Route("/api/chat", endpoint=handle_chat, methods=["POST"]))
 
+        async def _periodic_refresh():
+            """Re-check the published GTFS timestamp every 6 hours so the
+            cache stays current without anyone having to call refresh_schedule.
+            """
+            interval = int(os.environ.get("METRA_REFRESH_INTERVAL_SEC", "21600"))
+            while True:
+                try:
+                    await asyncio.sleep(interval)
+                    g = await get_gtfs()
+                    # Reloads only if published.txt changed; keeps serving the
+                    # current schedule otherwise (and during the reload).
+                    await g.reload_if_stale()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Background GTFS refresh failed")
+
         @contextlib.asynccontextmanager
         async def lifespan(app):
-            async with session_manager.run():
-                yield
+            # Warm the schedule cache so the first user request isn't slow.
+            try:
+                g = await get_gtfs()
+                await g.ensure_loaded()
+            except Exception:
+                logger.exception("Initial GTFS load failed; will retry on demand")
+            refresh_task = asyncio.create_task(_periodic_refresh())
+            try:
+                async with session_manager.run():
+                    yield
+            finally:
+                refresh_task.cancel()
+                try:
+                    await refresh_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                # Close the realtime HTTP client and flush stats.
+                if _rt_client is not None:
+                    try:
+                        await _rt_client.close()
+                    except Exception:
+                        logger.exception("Error closing realtime client")
+                stats.flush_stats()
 
         app = Starlette(
             routes=routes,
