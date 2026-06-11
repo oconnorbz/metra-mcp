@@ -127,6 +127,8 @@ For alerts, stack colored alert cards.
 For line status overview, use a grid of line status cards.
 For route/stop info, use clean list layouts.
 
+TOOL EFFICIENCY: Use the fewest tool calls that answer the question — typically one search_stops per station name the user gives, then one data call (get_next_trains, get_schedule, or get_alerts). Do not re-verify results with extra calls. Common station shorthand: "OTC" is Ogilvie Transportation Center, "CUS" is Chicago Union Station.
+
 Always end responses with a subtle footer showing the data timestamp if available.
 Keep HTML compact but data-rich. No lorem ipsum or placeholder text — use real fetched data only."""
 # Sliding-window per-IP limiter: max requests per window.
@@ -143,7 +145,13 @@ _chat_http: httpx.AsyncClient | None = None
 def _get_chat_http() -> httpx.AsyncClient:
     global _chat_http
     if _chat_http is None:
-        _chat_http = httpx.AsyncClient(timeout=120.0)
+        # Tool-heavy queries round-trip Anthropic -> tunnel -> /mcp several
+        # times per answer; a transient MCP-connector stall can push a request
+        # well past 120s. 240s read keeps us under the browser's ~300s fetch
+        # ceiling while not 502ing slow-but-successful generations.
+        _chat_http = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=240.0, write=30.0, pool=10.0)
+        )
     return _chat_http
 
 
