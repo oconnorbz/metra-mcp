@@ -247,10 +247,21 @@ function MetraCopilot() {
     setInput("");
     setLoading(true);
 
+    // Abort if the stream goes quiet for 2 minutes (upstream stall) rather
+    // than leaving the spinner running forever.
+    const controller = new AbortController();
+    let stallTimer;
+    const armStallTimer = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => controller.abort(), 120000);
+    };
+
     try {
+      armStallTimer();
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           theme: resolved,
           messages: history.map(m => ({ role: m.role, content: m.content || m.html || "" })),
@@ -277,6 +288,7 @@ function MetraCopilot() {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          armStallTimer();
           buf += decoder.decode(value, { stream: true });
           const events = buf.split("\n\n");
           buf = events.pop();
@@ -310,7 +322,11 @@ function MetraCopilot() {
 
       setMessages([...history, { role: "assistant", html: htmlContent }]);
     } catch (err) {
-      setError(err.message);
+      const friendly = err.name === "AbortError"
+        ? "The request stalled — live data feeds may be slow. Please try again."
+        : err.message;
+      setError(friendly);
+      err = { message: friendly };
       setMessages([...history, {
         role: "assistant",
         html: `<div class="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 rounded-xl p-4 font-mono">
@@ -319,6 +335,7 @@ function MetraCopilot() {
         </div>`
       }]);
     } finally {
+      clearTimeout(stallTimer);
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     }

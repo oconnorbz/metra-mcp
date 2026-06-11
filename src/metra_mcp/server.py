@@ -80,7 +80,7 @@ _CHAT_MODEL_ALLOWLIST = {
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
 }
-_CHAT_DEFAULT_MODEL = "claude-haiku-4-5"
+_CHAT_DEFAULT_MODEL = "claude-sonnet-4-5"
 _CHAT_MAX_TOKENS_CAP = 4096
 _CHAT_MAX_MESSAGES = 40
 _CHAT_MAX_BODY_BYTES = 256 * 1024
@@ -817,17 +817,21 @@ def main():
 
         _stats_html = _web_dir / "stats.html"
 
+        # no-cache so UI/API changes take effect on the next page load instead
+        # of stale JS hitting a newer API contract.
+        _HTML_HEADERS = {"Cache-Control": "no-cache"}
+
         async def handle_docs(request):
             stats.record_dashboard_event("page_view", {"page": "docs"})
-            return FileResponse(_docs_html, media_type="text/html")
+            return FileResponse(_docs_html, media_type="text/html", headers=_HTML_HEADERS)
 
         async def handle_copilot(request):
             stats.record_dashboard_event("page_view", {"page": "copilot"})
-            return FileResponse(_copilot_html, media_type="text/html")
+            return FileResponse(_copilot_html, media_type="text/html", headers=_HTML_HEADERS)
 
         async def handle_stats_page(request):
             stats.record_dashboard_event("page_view", {"page": "stats"})
-            return FileResponse(_stats_html, media_type="text/html")
+            return FileResponse(_stats_html, media_type="text/html", headers=_HTML_HEADERS)
 
         async def handle_health(request):
             """Liveness + basic readiness for reverse proxies / monitoring."""
