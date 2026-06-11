@@ -991,6 +991,12 @@ def main():
                 "max_tokens": max_tokens,
                 "system": _CHAT_SYSTEM_PROMPT.replace("{theme}", theme),
                 "messages": messages,
+                # Stream the upstream response and pass SSE straight through.
+                # Tool-heavy MCP queries can sit minutes between tool rounds;
+                # without bytes on the wire, Cloudflare's ~100s first-byte
+                # limit kills the request with a 524. Streaming keeps the
+                # connection alive end to end.
+                "stream": True,
                 "mcp_servers": [
                     {
                         "type": "url",
@@ -1000,42 +1006,70 @@ def main():
                 ],
             }
 
-            # Retry transient connection/read failures to the Anthropic API
-            # (a brief blip — e.g. a service restart mid-request — would
-            # otherwise surface to the user as a hard 500).
             headers = {
                 "Content-Type": "application/json",
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "anthropic-beta": "mcp-client-2025-04-04",
             }
-            last_exc: Exception | None = None
-            for attempt in range(3):
-                try:
-                    resp = await _get_chat_http().post(
-                        "https://api.anthropic.com/v1/messages",
-                        headers=headers,
-                        json=payload,
-                    )
-                    return JSONResponse(resp.json(), status_code=resp.status_code)
-                except (
-                    httpx.ConnectError,
-                    httpx.ConnectTimeout,
-                    httpx.ReadError,
-                    httpx.RemoteProtocolError,
-                ) as e:
-                    # Transient transport error — back off briefly and retry.
-                    last_exc = e
-                    logger.warning("Chat proxy transport error (attempt %d/3): %s", attempt + 1, e)
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                except Exception as e:
-                    # Non-transient (e.g. bad payload) — don't retry.
-                    logger.exception("Error proxying chat request")
-                    return JSONResponse({"error": str(e)}, status_code=502)
-            logger.error("Chat proxy failed after retries: %s", last_exc)
-            return JSONResponse(
-                {"error": f"Upstream API unreachable: {last_exc}"},
-                status_code=502,
+            from starlette.responses import StreamingResponse
+
+            async def event_stream():
+                """Pass the Anthropic SSE stream through verbatim.
+
+                Connection attempts are retried (a brief upstream blip would
+                otherwise surface as a hard error); once bytes are flowing
+                there is no retry — the client sees the upstream error event.
+                """
+                last_exc: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        async with _get_chat_http().stream(
+                            "POST",
+                            "https://api.anthropic.com/v1/messages",
+                            headers=headers,
+                            json=payload,
+                        ) as resp:
+                            if resp.status_code != 200:
+                                # Error responses are small JSON bodies; wrap
+                                # them in an SSE error event for the client.
+                                body = (await resp.aread()).decode("utf-8", "replace")
+                                yield f"event: error\ndata: {body}\n\n".encode()
+                                return
+                            async for chunk in resp.aiter_bytes():
+                                yield chunk
+                            return
+                    except (
+                        httpx.ConnectError,
+                        httpx.ConnectTimeout,
+                        httpx.ReadError,
+                        httpx.RemoteProtocolError,
+                    ) as e:
+                        last_exc = e
+                        logger.warning(
+                            "Chat proxy transport error (attempt %d/3): %s", attempt + 1, e
+                        )
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                    except Exception as e:
+                        logger.exception("Error proxying chat request")
+                        err = json.dumps({"type": "error", "error": {"type": "proxy_error", "message": str(e)}})
+                        yield f"event: error\ndata: {err}\n\n".encode()
+                        return
+                logger.error("Chat proxy failed after retries: %s", last_exc)
+                err = json.dumps({
+                    "type": "error",
+                    "error": {"type": "proxy_error", "message": f"Upstream API unreachable: {last_exc}"},
+                })
+                yield f"event: error\ndata: {err}\n\n".encode()
+
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    # Defeat proxy buffering so keepalive bytes actually flow.
+                    "X-Accel-Buffering": "no",
+                },
             )
 
         routes.append(Route("/", endpoint=handle_docs))
