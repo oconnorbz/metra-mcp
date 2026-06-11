@@ -264,11 +264,15 @@ function MetraCopilot() {
 
       const data = await response.json();
 
+      // Haiku sometimes wraps the fragment in a ```html fence — strip it so
+      // the markup renders instead of displaying as literal text.
       const htmlContent = (data.content || [])
         .filter(b => b.type === "text")
         .map(b => b.text)
         .join("\n")
-        .trim();
+        .trim()
+        .replace(/^```(?:html)?\s*/i, "")
+        .replace(/```\s*$/, "");
 
       setMessages([...history, { role: "assistant", html: htmlContent }]);
     } catch (err) {
