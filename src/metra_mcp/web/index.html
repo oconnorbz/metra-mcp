@@ -5,11 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Metra Copilot</title>
   <link rel="icon" type="image/png" href="/favicon.png">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
   <script>tailwind.config = { darkMode: 'class' };</script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
   <style>
     body { margin: 0; min-height: 100vh; transition: background 0.15s; }
     html.dark body { background: #09090b; }
@@ -24,44 +25,15 @@
   <script type="text/babel" data-type="module">
 const { useState, useRef, useEffect } = React;
 
-const buildSystemPrompt = (theme) => `You are Metra Copilot — a real-time Chicago commuter rail assistant with access to live Metra MCP tools. Always use Metra tools to fetch live data before responding.
+// The system prompt is pinned server-side (/api/chat builds it); the client
+// only sends the resolved theme so the model styles for the active mode.
 
-CRITICAL RULE: Your ENTIRE response must be a single valid HTML fragment using Tailwind CSS utility classes. Never output plain text, markdown, or explanation outside of HTML. The HTML will be rendered directly in a transit UI that supports both light and dark themes.
-
-THEME: The UI uses Tailwind's class-based dark mode. ALWAYS include both base (light) AND dark: prefixed classes for every color so the HTML adapts when the user toggles themes. Current theme is ${theme}.
-
-DESIGN SYSTEM (follow exactly — every color needs base + dark: variant):
-- Outer wrapper: <div class="font-mono text-sm">
-- Cards: bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-700/60 p-4
-- Section headers: text-amber-600 dark:text-amber-400 font-bold text-xs tracking-widest uppercase mb-3
-- Line names: text-zinc-900 dark:text-white font-bold
-- On-time / good: text-emerald-600 dark:text-emerald-400
-- Delayed / alert: text-red-600 dark:text-red-400
-- Warning: text-amber-600 dark:text-amber-400
-- Muted info: text-zinc-600 dark:text-zinc-400
-- Departure rows: flex justify-between border-b border-zinc-200 dark:border-zinc-800 py-2
-- Status badges: inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold
-
-STATUS BADGE COLORS (always include both variants):
-- On Time: bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800
-- Delayed: bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400 border border-red-300 dark:border-red-800
-- Alert: bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800
-- Cancelled: bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-400 dark:border-zinc-600
-
-For departures/schedules, use a departure board layout:
-<div class="font-mono">
-  <div class="grid grid-cols-3 text-zinc-500 dark:text-zinc-500 text-xs border-b border-zinc-200 dark:border-zinc-700 pb-2 mb-1">
-    <span>DEPARTS</span><span>TRAIN</span><span class="text-right">STATUS</span>
-  </div>
-  [rows]
-</div>
-
-For alerts, stack colored alert cards.
-For line status overview, use a grid of line status cards.
-For route/stop info, use clean list layouts.
-
-Always end responses with a subtle footer showing the data timestamp if available.
-Keep HTML compact but data-rich. No lorem ipuum or placeholder text — use real fetched data only.`;
+// Model HTML is sanitized before it touches the DOM — it is built from live
+// upstream feed data, which we don't trust to be markup-safe.
+const sanitize = (html) => DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+const escHtml = (s) => String(s).replace(/[&<>"']/g, ch => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+}[ch]));
 
 const QUICK_ACTIONS = [
   { icon: "⚠", label: "Service Alerts", query: "Show all current Metra service alerts" },
@@ -280,7 +252,7 @@ function MetraCopilot() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          system: buildSystemPrompt(resolved),
+          theme: resolved,
           messages: history.map(m => ({ role: m.role, content: m.content || m.html || "" })),
         })
       });
@@ -305,7 +277,7 @@ function MetraCopilot() {
         role: "assistant",
         html: `<div class="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 rounded-xl p-4 font-mono">
           <div class="text-red-700 dark:text-red-400 font-bold text-xs tracking-widest mb-2">⚠ SYSTEM ERROR</div>
-          <div class="text-red-600 dark:text-red-300 text-xs">${err.message}</div>
+          <div class="text-red-600 dark:text-red-300 text-xs">${escHtml(err.message)}</div>
         </div>`
       }]);
     } finally {
@@ -409,7 +381,7 @@ function MetraCopilot() {
                       {msg.content}
                     </div>
                   ) : (
-                    <div dangerouslySetInnerHTML={{ __html: msg.html }} style={{ width: "100%" }} />
+                    <div dangerouslySetInnerHTML={{ __html: sanitize(msg.html) }} style={{ width: "100%" }} />
                   )}
                 </div>
               ))}

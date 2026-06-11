@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hmac
 import ipaddress
 import json
 import logging
@@ -10,6 +11,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import httpx
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import CallToolResult, Icon, TextContent, Tool
@@ -75,17 +77,81 @@ def format_response(data: Any) -> str:
 # server-side to an allowlist, and rate-limit per client IP.
 _CHAT_MODEL_ALLOWLIST = {
     "claude-sonnet-4-5",
+    "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
 }
-_CHAT_DEFAULT_MODEL = "claude-sonnet-4-5"
+_CHAT_DEFAULT_MODEL = "claude-haiku-4-5"
 _CHAT_MAX_TOKENS_CAP = 4096
 _CHAT_MAX_MESSAGES = 40
 _CHAT_MAX_BODY_BYTES = 256 * 1024
+# Cap on total message text the proxy will forward. Input tokens are the
+# real cost lever on our API key; a chat session needs nowhere near 256KB.
+_CHAT_MAX_CONTENT_CHARS = 32 * 1024
+
+# System prompt is pinned server-side — the browser only picks the theme.
+# A client-supplied "system" field is ignored, so the endpoint can't be
+# repurposed as a general-purpose LLM proxy on our key.
+_CHAT_SYSTEM_PROMPT = """You are Metra Copilot — a real-time Chicago commuter rail assistant with access to live Metra MCP tools. Always use Metra tools to fetch live data before responding.
+
+CRITICAL RULE: Your ENTIRE response must be a single valid HTML fragment using Tailwind CSS utility classes. Never output plain text, markdown, or explanation outside of HTML. The HTML will be rendered directly in a transit UI that supports both light and dark themes.
+
+THEME: The UI uses Tailwind's class-based dark mode. ALWAYS include both base (light) AND dark: prefixed classes for every color so the HTML adapts when the user toggles themes. Current theme is {theme}.
+
+DESIGN SYSTEM (follow exactly — every color needs base + dark: variant):
+- Outer wrapper: <div class="font-mono text-sm">
+- Cards: bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-700/60 p-4
+- Section headers: text-amber-600 dark:text-amber-400 font-bold text-xs tracking-widest uppercase mb-3
+- Line names: text-zinc-900 dark:text-white font-bold
+- On-time / good: text-emerald-600 dark:text-emerald-400
+- Delayed / alert: text-red-600 dark:text-red-400
+- Warning: text-amber-600 dark:text-amber-400
+- Muted info: text-zinc-600 dark:text-zinc-400
+- Departure rows: flex justify-between border-b border-zinc-200 dark:border-zinc-800 py-2
+- Status badges: inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold
+
+STATUS BADGE COLORS (always include both variants):
+- On Time: bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800
+- Delayed: bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400 border border-red-300 dark:border-red-800
+- Alert: bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800
+- Cancelled: bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-400 dark:border-zinc-600
+
+For departures/schedules, use a departure board layout:
+<div class="font-mono">
+  <div class="grid grid-cols-3 text-zinc-500 dark:text-zinc-500 text-xs border-b border-zinc-200 dark:border-zinc-700 pb-2 mb-1">
+    <span>DEPARTS</span><span>TRAIN</span><span class="text-right">STATUS</span>
+  </div>
+  [rows]
+</div>
+
+For alerts, stack colored alert cards.
+For line status overview, use a grid of line status cards.
+For route/stop info, use clean list layouts.
+
+Always end responses with a subtle footer showing the data timestamp if available.
+Keep HTML compact but data-rich. No lorem ipsum or placeholder text — use real fetched data only."""
 # Sliding-window per-IP limiter: max requests per window.
 _CHAT_RATE_MAX = int(os.environ.get("METRA_CHAT_RATE_MAX", "20"))
 _CHAT_RATE_WINDOW_SEC = float(os.environ.get("METRA_CHAT_RATE_WINDOW_SEC", "60"))
 _chat_hits: dict[str, list[float]] = {}
 _chat_rate_lock = asyncio.Lock()
+
+# Shared HTTP client for the chat proxy so successive messages (and retries)
+# reuse pooled connections instead of paying a TLS handshake each time.
+_chat_http: httpx.AsyncClient | None = None
+
+
+def _get_chat_http() -> httpx.AsyncClient:
+    global _chat_http
+    if _chat_http is None:
+        _chat_http = httpx.AsyncClient(timeout=120.0)
+    return _chat_http
+
+
+# Optional token gating full detail on /api/stats. Without a valid token the
+# endpoints still work but client IPs and user-agents are redacted — the same
+# data we deliberately chmod 600 in the SQLite file shouldn't be world-readable
+# over HTTP.
+_STATS_TOKEN = os.environ.get("METRA_STATS_TOKEN", "")
 
 
 async def _chat_rate_limited(ip: str) -> bool:
@@ -263,10 +329,11 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="refresh_schedule",
             description=(
-                "Force re-download of the GTFS static schedule data. "
-                "Normally not needed — the server refreshes automatically on "
-                "startup and daily, plus on cache miss. Use this only after "
-                "Metra publishes a known mid-day schedule change."
+                "Re-check Metra's published GTFS timestamp and re-download the "
+                "static schedule only if it changed. Normally not needed — the "
+                "server refreshes automatically on startup and every few hours. "
+                "Use this only after Metra publishes a known mid-day schedule "
+                "change."
             ),
             inputSchema={"type": "object", "properties": {}},
             outputSchema={
@@ -483,10 +550,18 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
         )
 
     elif name == "refresh_schedule":
-        result = await gtfs.refresh()
+        # The MCP endpoint is public, so this must not be a free lever to
+        # force full re-downloads from Metra. reload_if_stale only downloads
+        # when the published timestamp actually changed.
+        reloaded = await gtfs.reload_if_stale()
+        if reloaded:
+            return _tool_result(
+                "Schedule data refreshed.",
+                {"status": "refreshed", "message": "Metra published a new schedule; data reloaded."},
+            )
         return _tool_result(
-            "Schedule data refreshed.",
-            {"status": "refreshed", "message": result},
+            "Schedule already current.",
+            {"status": "current", "message": "Published schedule unchanged; no download needed."},
         )
 
     elif name == "get_train_positions":
@@ -727,7 +802,6 @@ def main():
         # --- Web frontend: chat UI + /api/chat proxy to Anthropic API ---
         from pathlib import Path as _Path
         from starlette.responses import FileResponse, JSONResponse
-        import httpx as _httpx
 
         _web_dir = _Path(__file__).parent / "web"
         _docs_html = _web_dir / "docs.html"
@@ -758,16 +832,46 @@ def main():
                 }
             )
 
+        def _stats_full_access(request) -> bool:
+            """True when the caller presented the stats token (if configured)."""
+            if not _STATS_TOKEN:
+                return False
+            supplied = (
+                request.headers.get("x-stats-token")
+                or request.query_params.get("token")
+                or ""
+            )
+            return hmac.compare_digest(supplied, _STATS_TOKEN)
+
         async def handle_stats_api(request):
             kind = request.path_params.get("kind", "summary")
+            try:
+                limit = int(request.query_params.get("limit", "200"))
+            except ValueError:
+                limit = 200
+            limit = max(1, min(limit, 1000))
+            full = _stats_full_access(request)
+
             if kind == "summary":
-                return JSONResponse(stats.summary())
+                data = stats.summary()
+                if not full:
+                    data["mcp"].pop("top_ips", None)
+                    data["dashboard"].pop("top_ips", None)
+                return JSONResponse(data)
             if kind == "mcp":
-                limit = int(request.query_params.get("limit", "200"))
-                return JSONResponse({"calls": stats.query_mcp_calls(limit)})
+                calls = stats.query_mcp_calls(limit)
+                if not full:
+                    for c in calls:
+                        c.pop("ip", None)
+                        c.pop("user_agent", None)
+                return JSONResponse({"calls": calls})
             if kind == "dashboard":
-                limit = int(request.query_params.get("limit", "200"))
-                return JSONResponse({"events": stats.query_dashboard_events(limit)})
+                events = stats.query_dashboard_events(limit)
+                if not full:
+                    for e in events:
+                        e.pop("ip", None)
+                        e.pop("user_agent", None)
+                return JSONResponse({"events": events})
             return JSONResponse({"error": "unknown kind"}, status_code=404)
 
         _FAVICON_HEADERS = {"Cache-Control": "public, max-age=300"}
@@ -832,6 +936,15 @@ def main():
                     {"error": f"Too many messages (max {_CHAT_MAX_MESSAGES})"},
                     status_code=400,
                 )
+            total_chars = 0
+            for m in messages:
+                c = m.get("content", "") if isinstance(m, dict) else ""
+                total_chars += len(c) if isinstance(c, str) else len(json.dumps(c, default=str))
+            if total_chars > _CHAT_MAX_CONTENT_CHARS:
+                return JSONResponse(
+                    {"error": f"Conversation too long (max {_CHAT_MAX_CONTENT_CHARS} characters)"},
+                    status_code=400,
+                )
             last_user = ""
             for m in reversed(messages):
                 if m.get("role") == "user":
@@ -861,10 +974,14 @@ def main():
                 host = request.headers.get("host", request.url.netloc)
                 public_mcp_url = f"{scheme}://{host}/mcp"
 
+            theme = body.get("theme")
+            if theme not in ("light", "dark"):
+                theme = "dark"
+
             payload = {
                 "model": model,
                 "max_tokens": max_tokens,
-                "system": body.get("system", ""),
+                "system": _CHAT_SYSTEM_PROMPT.replace("{theme}", theme),
                 "messages": messages,
                 "mcp_servers": [
                     {
@@ -887,18 +1004,17 @@ def main():
             last_exc: Exception | None = None
             for attempt in range(3):
                 try:
-                    async with _httpx.AsyncClient(timeout=120.0) as client:
-                        resp = await client.post(
-                            "https://api.anthropic.com/v1/messages",
-                            headers=headers,
-                            json=payload,
-                        )
+                    resp = await _get_chat_http().post(
+                        "https://api.anthropic.com/v1/messages",
+                        headers=headers,
+                        json=payload,
+                    )
                     return JSONResponse(resp.json(), status_code=resp.status_code)
                 except (
-                    _httpx.ConnectError,
-                    _httpx.ConnectTimeout,
-                    _httpx.ReadError,
-                    _httpx.RemoteProtocolError,
+                    httpx.ConnectError,
+                    httpx.ConnectTimeout,
+                    httpx.ReadError,
+                    httpx.RemoteProtocolError,
                 ) as e:
                     # Transient transport error — back off briefly and retry.
                     last_exc = e
@@ -959,12 +1075,17 @@ def main():
                     await refresh_task
                 except (asyncio.CancelledError, Exception):
                     pass
-                # Close the realtime HTTP client and flush stats.
+                # Close the realtime + chat HTTP clients and flush stats.
                 if _rt_client is not None:
                     try:
                         await _rt_client.close()
                     except Exception:
                         logger.exception("Error closing realtime client")
+                if _chat_http is not None:
+                    try:
+                        await _chat_http.aclose()
+                    except Exception:
+                        logger.exception("Error closing chat HTTP client")
                 stats.flush_stats()
 
         app = Starlette(

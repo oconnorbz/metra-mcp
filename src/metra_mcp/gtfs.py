@@ -103,7 +103,9 @@ class GTFSData:
                     needs_download = False
             if needs_download:
                 await self._download_schedule(cache_file)
-            self._parse_zip(cache_file)
+            # Parsing + indexing is seconds of CPU over ~10^5 stop_times rows;
+            # run it off the event loop so other requests keep being served.
+            await asyncio.to_thread(self._parse_zip, cache_file)
             self._loaded = True
             logger.info(
                 "GTFS data loaded: %d routes, %d stops, %d trips, %d stop_times",
@@ -134,12 +136,17 @@ class GTFSData:
             async with httpx.AsyncClient(timeout=60.0, verify=_get_ssl_context()) as client:
                 resp = await client.get(SCHEDULE_URL)
                 resp.raise_for_status()
-                tmp_zip.write_bytes(resp.content)
-            # Validate the download before committing.
-            with zipfile.ZipFile(tmp_zip) as zf:
-                bad = zf.testzip()
-                if bad is not None:
-                    raise RuntimeError(f"Downloaded GTFS zip is corrupt: {bad}")
+                await asyncio.to_thread(tmp_zip.write_bytes, resp.content)
+
+            # Validate the download before committing (CRC over the whole
+            # archive — CPU-bound, keep it off the event loop).
+            def _validate() -> None:
+                with zipfile.ZipFile(tmp_zip) as zf:
+                    bad = zf.testzip()
+                    if bad is not None:
+                        raise RuntimeError(f"Downloaded GTFS zip is corrupt: {bad}")
+
+            await asyncio.to_thread(_validate)
             remote_ts = await self._get_published_timestamp()
             tmp_ts.write_text(remote_ts)
             os.replace(tmp_zip, dest)
@@ -441,7 +448,7 @@ class GTFSData:
         async with self._load_lock:
             cache_file = self.cache_dir / "schedule.zip"
             await self._download_schedule(cache_file)
-            self._parse_zip(cache_file)
+            await asyncio.to_thread(self._parse_zip, cache_file)
             self._loaded = True
         return f"Schedule refreshed. {len(self._routes)} routes, {len(self._stops)} stops loaded."
 
@@ -463,7 +470,7 @@ class GTFSData:
                 return False
             cache_file = self.cache_dir / "schedule.zip"
             await self._download_schedule(cache_file)
-            self._parse_zip(cache_file)
+            await asyncio.to_thread(self._parse_zip, cache_file)
             self._loaded = True
             logger.info("Schedule reloaded after publish change (%s)", remote_ts)
             return True

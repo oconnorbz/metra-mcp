@@ -26,6 +26,10 @@ Environment=METRA_API_TOKEN=replace-me
 # Optional: background GTFS freshness check interval (default 21600s = 6h)
 # Environment=METRA_REFRESH_INTERVAL_SEC=21600
 
+# Optional: token unlocking client IPs / user-agents on /api/stats
+# (visit /stats?token=<value>). Redacted for everyone else.
+# Environment=METRA_STATS_TOKEN=replace-me
+
 Environment=MCP_HOST=0.0.0.0
 Environment=MCP_PORT=8080
 

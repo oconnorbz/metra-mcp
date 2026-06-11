@@ -271,6 +271,11 @@
   <script>
     const $ = (id) => document.getElementById(id);
 
+    // Visit /stats?token=... to see client IPs / user-agents; without a valid
+    // METRA_STATS_TOKEN the API redacts them and the columns show "—".
+    const STATS_TOKEN = new URLSearchParams(location.search).get("token");
+    const api = (path) => fetch(path, STATS_TOKEN ? { headers: { "X-Stats-Token": STATS_TOKEN } } : undefined);
+
     function esc(s) {
       if (s == null) return "";
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -282,9 +287,11 @@
     }
 
     async function loadSummary() {
-      const r = await fetch("/api/stats/summary");
+      const r = await api("/api/stats/summary");
       const s = await r.json();
       const m = s.mcp, d = s.dashboard;
+      m.top_ips = m.top_ips || [];
+      d.top_ips = d.top_ips || [];
       $("mcp-total").textContent = m.total.toLocaleString();
       $("mcp-errors").textContent = m.errors.toLocaleString();
       $("mcp-errpct").textContent = m.total > 0 ? `${(m.errors / m.total * 100).toFixed(1)}% error rate` : "";
@@ -309,14 +316,14 @@
     let mcpRows = [], dashRows = [];
 
     async function loadMcpCalls() {
-      const r = await fetch("/api/stats/mcp?limit=300");
+      const r = await api("/api/stats/mcp?limit=300");
       const j = await r.json();
       mcpRows = j.calls;
       renderMcp();
     }
 
     async function loadDashEvents() {
-      const r = await fetch("/api/stats/dashboard?limit=300");
+      const r = await api("/api/stats/dashboard?limit=300");
       const j = await r.json();
       dashRows = j.events;
       renderDash();
