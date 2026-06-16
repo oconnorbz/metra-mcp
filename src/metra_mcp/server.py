@@ -280,7 +280,12 @@ async def list_tools() -> list[Tool]:
                     },
                     "direction": {
                         "type": "string",
-                        "description": "'0' for inbound (to Chicago), '1' for outbound (from Chicago)",
+                        "description": (
+                            "Raw GTFS direction_id. Metra inverts the usual "
+                            "convention: '1' is inbound (toward Chicago), '0' "
+                            "is outbound (away from Chicago). Each trip also "
+                            "returns a derived 'direction' label."
+                        ),
                     },
                     "date_str": {
                         "type": "string",

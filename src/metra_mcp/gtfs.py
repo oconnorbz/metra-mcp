@@ -33,6 +33,18 @@ def _chicago_today() -> date:
     return _chicago_now().date()
 
 
+def _direction_label(direction_id: str) -> str:
+    """Human-readable direction from Metra's raw GTFS direction_id.
+
+    NOTE: Metra inverts the common GTFS convention. In Metra's trips.txt,
+    direction_id="1" is *inbound* (toward Chicago, e.g. Chicago OTC/Union
+    Station) and direction_id="0" is *outbound* (away from downtown). This is
+    the opposite of the textbook GTFS guidance, so the raw flag alone reads as
+    "backwards" unless you know the convention.
+    """
+    return {"1": "inbound", "0": "outbound"}.get((direction_id or "").strip(), "")
+
+
 def _get_ssl_context() -> ssl.SSLContext | bool:
     """Get SSL context using SSL_CERT_FILE if set, for Netskope compatibility."""
     cert_file = os.environ.get("SSL_CERT_FILE")
@@ -300,7 +312,10 @@ class GTFSData:
         Args:
             route_id: The Metra route ID (e.g. "BNSF", "UP-N").
             stop_id: Optional stop ID to filter by.
-            direction: Optional direction_id ("0" for inbound, "1" for outbound).
+            direction: Optional raw GTFS direction_id. NOTE: Metra inverts the
+                usual convention -- "1" is inbound (toward Chicago) and "0" is
+                outbound. Each result also carries a derived "direction"
+                ("inbound"/"outbound") for clarity. See _direction_label.
             query_date: Date to check service; defaults to today.
         """
         active_services = self.get_active_service_ids(query_date)
@@ -324,6 +339,7 @@ class GTFSData:
                         "trip_id": trip["trip_id"],
                         "trip_headsign": trip.get("trip_headsign", ""),
                         "direction_id": trip.get("direction_id", ""),
+                        "direction": _direction_label(trip.get("direction_id", "")),
                         "arrival_time": stop_info.get("arrival_time", ""),
                         "departure_time": stop_info.get("departure_time", ""),
                     }
@@ -334,6 +350,7 @@ class GTFSData:
                         "trip_id": trip["trip_id"],
                         "trip_headsign": trip.get("trip_headsign", ""),
                         "direction_id": trip.get("direction_id", ""),
+                        "direction": _direction_label(trip.get("direction_id", "")),
                         "first_stop": stop_times[0].get("departure_time", "")
                         if stop_times
                         else "",
@@ -412,6 +429,7 @@ class GTFSData:
                     "route_id": trip["route_id"],
                     "trip_headsign": trip.get("trip_headsign", ""),
                     "direction_id": trip.get("direction_id", ""),
+                    "direction": _direction_label(trip.get("direction_id", "")),
                     "departure_time": dep_time,
                     "minutes_until": effective - current_time_minutes,
                 }
