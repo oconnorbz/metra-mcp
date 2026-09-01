@@ -9,20 +9,16 @@ import csv
 import io
 import logging
 import os
-import ssl
 import zipfile
 from collections import defaultdict
-from datetime import datetime, date, timedelta, timezone
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-try:
-    from zoneinfo import ZoneInfo
-    CHICAGO_TZ = ZoneInfo("America/Chicago")
-except ImportError:
-    CHICAGO_TZ = timezone(timedelta(hours=-5))
+from .common import CHICAGO_TZ, get_ssl_context
 
 
 def _chicago_now() -> datetime:
@@ -45,42 +41,78 @@ def _direction_label(direction_id: str) -> str:
     return {"1": "inbound", "0": "outbound"}.get((direction_id or "").strip(), "")
 
 
-def _get_ssl_context() -> ssl.SSLContext | bool:
-    """Get SSL context using SSL_CERT_FILE if set, for Netskope compatibility."""
-    cert_file = os.environ.get("SSL_CERT_FILE")
-    if cert_file and Path(cert_file).exists():
-        ctx = ssl.create_default_context(cafile=cert_file)
-        return ctx
-    return True
-
 logger = logging.getLogger(__name__)
 
 SCHEDULE_URL = "https://schedules.metrarail.com/gtfs/schedule.zip"
 PUBLISHED_URL = "https://schedules.metrarail.com/gtfs/published.txt"
+
+# Only the columns the query methods actually read. stop_times.txt is by far
+# the largest table (~10^5 rows); dropping the unused columns (pickup_type,
+# drop_off_type, shape_dist_traveled, notice, ...) roughly halves resident
+# memory. None means "keep every column".
+_KEEP_COLUMNS: dict[str, frozenset[str] | None] = {
+    "routes.txt": None,
+    "stops.txt": frozenset({"stop_id", "stop_name", "stop_lat", "stop_lon"}),
+    "trips.txt": frozenset({"trip_id", "route_id", "service_id", "trip_headsign", "direction_id"}),
+    "stop_times.txt": frozenset(
+        {"trip_id", "stop_id", "arrival_time", "departure_time", "stop_sequence"}
+    ),
+    "calendar.txt": None,
+    "calendar_dates.txt": None,
+}
+
+
+def default_cache_dir() -> Path:
+    """Where the schedule zip is cached.
+
+    Precedence: METRA_CACHE_DIR, then systemd's $STATE_DIRECTORY (set when the
+    unit uses StateDirectory=, which is the only writable location under
+    DynamicUser/ProtectSystem=strict), then ~/.cache/metra-mcp.
+    """
+    env = os.environ.get("METRA_CACHE_DIR")
+    if env:
+        return Path(env)
+    state = os.environ.get("STATE_DIRECTORY")
+    if state:
+        # STATE_DIRECTORY may be a colon-separated list; use the first.
+        return Path(state.split(":")[0]) / "cache"
+    return Path.home() / ".cache" / "metra-mcp"
+
+
+@dataclass(frozen=True)
+class _Snapshot:
+    """One fully parsed + indexed schedule.
+
+    Built off the event loop in a worker thread and then swapped into
+    GTFSData with a single attribute assignment, so readers only ever see a
+    schedule whose tables and indexes agree with each other.
+    """
+
+    routes: list[dict[str, str]] = field(default_factory=list)
+    stops: list[dict[str, str]] = field(default_factory=list)
+    trips: list[dict[str, str]] = field(default_factory=list)
+    calendar: list[dict[str, str]] = field(default_factory=list)
+    calendar_dates: list[dict[str, str]] = field(default_factory=list)
+    stop_times_count: int = 0
+    stop_by_id: dict[str, dict[str, str]] = field(default_factory=dict)
+    stop_times_by_trip: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    stop_times_by_stop: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    trips_by_route: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    trip_by_id: dict[str, dict[str, str]] = field(default_factory=dict)
+
+
+_EMPTY = _Snapshot()
 
 
 class GTFSData:
     """Manages GTFS static schedule data."""
 
     def __init__(self, cache_dir: Path | None = None):
-        self.cache_dir = cache_dir or Path.home() / ".cache" / "metra-mcp"
+        self.cache_dir = cache_dir or default_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self._routes: list[dict[str, str]] = []
-        self._stops: list[dict[str, str]] = []
-        self._trips: list[dict[str, str]] = []
-        self._stop_times: list[dict[str, str]] = []
-        self._calendar: list[dict[str, str]] = []
-        self._calendar_dates: list[dict[str, str]] = []
-        self._shapes: list[dict[str, str]] = []
-        self._stop_by_id: dict[str, dict[str, str]] = {}
-        # Indexes built once at parse time so per-query work stays small even
-        # though stop_times can be hundreds of thousands of rows.
-        self._stop_times_by_trip: dict[str, list[dict[str, str]]] = {}
-        self._stop_times_by_stop: dict[str, list[dict[str, str]]] = {}
-        self._trips_by_route: dict[str, list[dict[str, str]]] = {}
-        self._trip_by_id: dict[str, dict[str, str]] = {}
+        # All schedule state lives in one immutable snapshot; see _Snapshot.
+        self._snap: _Snapshot = _EMPTY
         self._loaded = False
-        self._published_timestamp: str | None = None
         # Serializes downloads/parses so concurrent first-requests (and the
         # periodic refresh) don't all redownload at once.
         self._load_lock = asyncio.Lock()
@@ -88,6 +120,47 @@ class GTFSData:
     @property
     def loaded(self) -> bool:
         return self._loaded
+
+    # Thin accessors so the query methods below read naturally.
+    @property
+    def _routes(self) -> list[dict[str, str]]:
+        return self._snap.routes
+
+    @property
+    def _stops(self) -> list[dict[str, str]]:
+        return self._snap.stops
+
+    @property
+    def _trips(self) -> list[dict[str, str]]:
+        return self._snap.trips
+
+    @property
+    def _calendar(self) -> list[dict[str, str]]:
+        return self._snap.calendar
+
+    @property
+    def _calendar_dates(self) -> list[dict[str, str]]:
+        return self._snap.calendar_dates
+
+    @property
+    def _stop_by_id(self) -> dict[str, dict[str, str]]:
+        return self._snap.stop_by_id
+
+    @property
+    def _stop_times_by_trip(self) -> dict[str, list[dict[str, str]]]:
+        return self._snap.stop_times_by_trip
+
+    @property
+    def _stop_times_by_stop(self) -> dict[str, list[dict[str, str]]]:
+        return self._snap.stop_times_by_stop
+
+    @property
+    def _trips_by_route(self) -> dict[str, list[dict[str, str]]]:
+        return self._snap.trips_by_route
+
+    @property
+    def _trip_by_id(self) -> dict[str, dict[str, str]]:
+        return self._snap.trip_by_id
 
     async def ensure_loaded(self) -> None:
         """Load schedule data, downloading if needed.
@@ -115,21 +188,30 @@ class GTFSData:
                     needs_download = False
             if needs_download:
                 await self._download_schedule(cache_file)
-            # Parsing + indexing is seconds of CPU over ~10^5 stop_times rows;
-            # run it off the event loop so other requests keep being served.
-            await asyncio.to_thread(self._parse_zip, cache_file)
-            self._loaded = True
+            await self._load_snapshot(cache_file)
             logger.info(
                 "GTFS data loaded: %d routes, %d stops, %d trips, %d stop_times",
-                len(self._routes),
-                len(self._stops),
-                len(self._trips),
-                len(self._stop_times),
+                len(self._snap.routes),
+                len(self._snap.stops),
+                len(self._snap.trips),
+                self._snap.stop_times_count,
             )
+
+    async def _load_snapshot(self, cache_file: Path) -> None:
+        """Parse + index off the event loop, then publish atomically.
+
+        Parsing is seconds of CPU over ~10^5 stop_times rows, so it runs in a
+        worker thread; the single assignment at the end is what makes a
+        mid-refresh reader see either the old or the new schedule, never a
+        mix. Caller must hold _load_lock.
+        """
+        snap = await asyncio.to_thread(self._parse_zip, cache_file)
+        self._snap = snap
+        self._loaded = True
 
     async def _get_published_timestamp(self) -> str:
         """Check when the static schedule was last published."""
-        async with httpx.AsyncClient(timeout=10.0, verify=_get_ssl_context()) as client:
+        async with httpx.AsyncClient(timeout=10.0, verify=get_ssl_context()) as client:
             resp = await client.get(PUBLISHED_URL)
             resp.raise_for_status()
             return resp.text.strip()
@@ -145,7 +227,7 @@ class GTFSData:
         tmp_zip = dest.with_suffix(dest.suffix + ".tmp")
         tmp_ts = self.cache_dir / "published.txt.tmp"
         try:
-            async with httpx.AsyncClient(timeout=60.0, verify=_get_ssl_context()) as client:
+            async with httpx.AsyncClient(timeout=60.0, verify=get_ssl_context()) as client:
                 resp = await client.get(SCHEDULE_URL)
                 resp.raise_for_status()
                 await asyncio.to_thread(tmp_zip.write_bytes, resp.content)
@@ -171,28 +253,38 @@ class GTFSData:
                 except FileNotFoundError:
                     pass
 
-    def _parse_zip(self, zip_path: Path) -> None:
-        """Parse GTFS text files from the zip."""
+    def _parse_zip(self, zip_path: Path) -> _Snapshot:
+        """Parse GTFS text files from the zip into a new snapshot (pure; no
+        instance state is touched, so it is safe to run in a worker thread
+        while requests keep reading the current snapshot)."""
         with zipfile.ZipFile(zip_path) as zf:
-            self._routes = self._read_csv(zf, "routes.txt")
-            self._stops = self._read_csv(zf, "stops.txt")
-            self._trips = self._read_csv(zf, "trips.txt")
-            self._stop_times = self._read_csv(zf, "stop_times.txt")
-            self._calendar = self._read_csv(zf, "calendar.txt")
-            self._calendar_dates = self._read_csv(zf, "calendar_dates.txt")
-        self._build_indexes()
+            routes = self._read_csv(zf, "routes.txt")
+            stops = self._read_csv(zf, "stops.txt")
+            trips = self._read_csv(zf, "trips.txt")
+            stop_times = self._read_csv(zf, "stop_times.txt")
+            calendar = self._read_csv(zf, "calendar.txt")
+            calendar_dates = self._read_csv(zf, "calendar_dates.txt")
+        return self._build_indexes(routes, stops, trips, stop_times, calendar, calendar_dates)
 
-    def _build_indexes(self) -> None:
+    @staticmethod
+    def _build_indexes(
+        routes: list[dict[str, str]],
+        stops: list[dict[str, str]],
+        trips: list[dict[str, str]],
+        stop_times: list[dict[str, str]],
+        calendar: list[dict[str, str]],
+        calendar_dates: list[dict[str, str]],
+    ) -> _Snapshot:
         """Precompute lookup indexes so per-query work avoids full scans.
 
         stop_times is the largest table; without these, get_schedule is
         O(trips × stop_times) and get_next_trains scans every row per call.
         """
-        self._stop_by_id = {s["stop_id"]: s for s in self._stops if s.get("stop_id")}
+        stop_by_id = {s["stop_id"]: s for s in stops if s.get("stop_id")}
 
         by_trip: dict[str, list[dict[str, str]]] = defaultdict(list)
         by_stop: dict[str, list[dict[str, str]]] = defaultdict(list)
-        for st in self._stop_times:
+        for st in stop_times:
             tid = st.get("trip_id")
             if tid:
                 by_trip[tid].append(st)
@@ -206,7 +298,7 @@ class GTFSData:
 
         by_route: dict[str, list[dict[str, str]]] = defaultdict(list)
         trip_by_id: dict[str, dict[str, str]] = {}
-        for t in self._trips:
+        for t in trips:
             rid = t.get("route_id")
             if rid:
                 by_route[rid].append(t)
@@ -214,25 +306,43 @@ class GTFSData:
             if tid:
                 trip_by_id[tid] = t
 
-        self._stop_times_by_trip = by_trip
-        self._stop_times_by_stop = by_stop
-        self._trips_by_route = by_route
-        self._trip_by_id = trip_by_id
+        return _Snapshot(
+            routes=routes,
+            stops=stops,
+            trips=trips,
+            calendar=calendar,
+            calendar_dates=calendar_dates,
+            stop_times_count=len(stop_times),
+            stop_by_id=stop_by_id,
+            stop_times_by_trip=dict(by_trip),
+            stop_times_by_stop=dict(by_stop),
+            trips_by_route=dict(by_route),
+            trip_by_id=trip_by_id,
+        )
 
-    def _read_csv(self, zf: zipfile.ZipFile, filename: str) -> list[dict[str, str]]:
+    @staticmethod
+    def _read_csv(zf: zipfile.ZipFile, filename: str) -> list[dict[str, str]]:
         """Read a CSV file from the zip archive.
 
         Metra's GTFS files have leading spaces in column headers and values,
-        so we strip all keys and values during parsing.
+        so we strip all keys and values during parsing. Columns not listed in
+        _KEEP_COLUMNS for the file are dropped to save memory.
         """
+        keep = _KEEP_COLUMNS.get(filename)
         try:
             with zf.open(filename) as f:
                 text = io.TextIOWrapper(f, encoding="utf-8-sig")
                 reader = csv.DictReader(text)
-                return [
-                    {k.strip(): v.strip() for k, v in row.items()}
-                    for row in reader
-                ]
+                if reader.fieldnames is None:
+                    return []
+                # Strip header names once rather than per row.
+                cols = [(raw, raw.strip()) for raw in reader.fieldnames]
+                if keep is not None:
+                    cols = [(raw, name) for raw, name in cols if name in keep]
+                rows: list[dict[str, str]] = []
+                for row in reader:
+                    rows.append({name: (row.get(raw) or "").strip() for raw, name in cols})
+                return rows
         except KeyError:
             logger.warning("File %s not found in schedule zip", filename)
             return []
@@ -435,7 +545,13 @@ class GTFSData:
                 }
             )
         upcoming.sort(key=lambda x: x["minutes_until"])
-        return upcoming[:limit]
+        # JSON Schema "integer" admits 5.0, and a negative limit would slice
+        # from the wrong end; normalize to a sane positive int.
+        try:
+            n = int(limit)
+        except (TypeError, ValueError):
+            n = 5
+        return upcoming[: max(1, n)]
 
     def get_stop_name(self, stop_id: str) -> str:
         """O(1) stop name lookup. Returns "" if stop_id is unknown."""
@@ -459,15 +575,14 @@ class GTFSData:
     async def refresh(self) -> str:
         """Force re-download of schedule data.
 
-        Holds the load lock and reparses in place; `_loaded` stays True
-        throughout so concurrent readers keep serving the previous data
-        instead of seeing an empty schedule mid-refresh.
+        Holds the load lock; the new snapshot is parsed in a worker thread and
+        swapped in atomically, so concurrent readers keep serving the
+        previous schedule until the new one is complete.
         """
         async with self._load_lock:
             cache_file = self.cache_dir / "schedule.zip"
             await self._download_schedule(cache_file)
-            await asyncio.to_thread(self._parse_zip, cache_file)
-            self._loaded = True
+            await self._load_snapshot(cache_file)
         return f"Schedule refreshed. {len(self._routes)} routes, {len(self._stops)} stops loaded."
 
     async def reload_if_stale(self) -> bool:
@@ -488,7 +603,6 @@ class GTFSData:
                 return False
             cache_file = self.cache_dir / "schedule.zip"
             await self._download_schedule(cache_file)
-            await asyncio.to_thread(self._parse_zip, cache_file)
-            self._loaded = True
+            await self._load_snapshot(cache_file)
             logger.info("Schedule reloaded after publish change (%s)", remote_ts)
             return True

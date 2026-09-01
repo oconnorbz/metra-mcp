@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import queue
+import re
 import sqlite3
 import stat
 import threading
@@ -23,7 +24,37 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_DB_PATH = Path(os.environ.get("METRA_STATS_DB", "/var/lib/metra-mcp/stats.db"))
+
+
+def _default_db_path() -> Path:
+    """METRA_STATS_DB, else systemd's $STATE_DIRECTORY, else /var/lib/metra-mcp."""
+    env = os.environ.get("METRA_STATS_DB")
+    if env:
+        return Path(env)
+    state = os.environ.get("STATE_DIRECTORY")
+    if state:
+        return Path(state.split(":")[0]) / "stats.db"
+    return Path("/var/lib/metra-mcp/stats.db")
+
+
+_DB_PATH = _default_db_path()
+
+# Defense in depth: never persist anything that looks like a credential, even
+# if an upstream library's error message smuggles one in. Matches the Metra
+# api_token query parameter and Anthropic-style keys.
+_SECRET_RE = re.compile(r"(api_token=)[^&'\"\s]+|sk-ant-[A-Za-z0-9_\-]{8,}")
+
+
+def _scrub(val: str | None) -> str | None:
+    if not val:
+        return val
+    return _SECRET_RE.sub(lambda m: (m.group(1) or "") + "<redacted>", val)
+
+
+# /stats summary is a handful of full-table aggregates; cache it briefly so a
+# page refresh storm (or a scraper) can't turn into a SQLite CPU burn.
+_SUMMARY_TTL_SEC = 30.0
+_summary_cache: tuple[float, dict[str, Any]] | None = None
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
@@ -47,7 +78,7 @@ def _log_err(msg: str, exc: BaseException) -> None:
     if now - _last_err_log < _ERR_LOG_INTERVAL_SEC:
         return
     _last_err_log = now
-    logger.warning("%s: %s", msg, exc, exc_info=True)
+    logger.warning("%s: %s", msg, exc, exc_info=exc)
 
 
 @dataclass
@@ -114,6 +145,12 @@ def _ensure_db() -> sqlite3.Connection:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_ts ON mcp_calls(ts DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dash_ts ON dashboard_events(ts DESC)")
+    # Aggregates on the /stats summary group by these.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_tool ON mcp_calls(tool_name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_ip ON mcp_calls(ip)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mcp_success ON mcp_calls(success)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dash_ip ON dashboard_events(ip)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dash_path_type ON dashboard_events(path, event_type)")
     _conn = conn
     return conn
 
@@ -148,24 +185,27 @@ def _start_writer_if_needed() -> None:
         if _writer_started:
             return
         _write_q = queue.Queue(maxsize=_QUEUE_MAX)
-        t = threading.Thread(target=_writer_loop, name="metra-stats-writer", daemon=True)
+        # Pass the queue explicitly: flush_stats() nulls the global when it
+        # retires this writer, and the loop must keep draining its own queue.
+        t = threading.Thread(
+            target=_writer_loop, args=(_write_q,), name="metra-stats-writer", daemon=True
+        )
         t.start()
         _writer_started = True
 
 
-def _writer_loop() -> None:
+def _writer_loop(q: queue.Queue) -> None:
     """Drain the write queue into SQLite in batches.
 
     Coalesces inserts within _FLUSH_INTERVAL_SEC or _BATCH_LIMIT events,
-    whichever comes first. Sentinel value None on the queue signals shutdown.
+    whichever comes first. The _SHUTDOWN sentinel on the queue ends the loop.
     """
-    assert _write_q is not None
     pending: list[tuple[str, tuple]] = []
     deadline = time.monotonic() + _FLUSH_INTERVAL_SEC
     while True:
         timeout = max(0.0, deadline - time.monotonic())
         try:
-            item = _write_q.get(timeout=timeout)
+            item = q.get(timeout=timeout)
         except queue.Empty:
             item = None  # flush on timeout
         if item is _SHUTDOWN:
@@ -202,23 +242,33 @@ def _flush(items: list[tuple[str, tuple]]) -> None:
 
 def _enqueue(sql: str, params: tuple) -> None:
     _start_writer_if_needed()
+    q = _write_q
+    if q is None:  # raced with shutdown; drop
+        return
     try:
         # Non-blocking; if the queue is full we drop the event rather than
         # blocking a request thread.
-        _write_q.put_nowait((sql, params))  # type: ignore[union-attr]
+        q.put_nowait((sql, params))
     except queue.Full:
         _log_err("stats queue full, dropping event", RuntimeError("queue full"))
 
 
 def flush_stats(timeout: float = 5.0) -> None:
     """Drain pending writes synchronously. Call from shutdown hooks."""
-    if not _writer_started or _write_q is None:
-        return
-    _write_q.put(_SHUTDOWN)
+    global _write_q, _writer_started
+    with _writer_lock:
+        if not _writer_started or _write_q is None:
+            return
+        q = _write_q
+        # Reset so a later _enqueue (e.g. a request racing shutdown) starts a
+        # fresh writer instead of posting into a queue nobody drains.
+        _write_q = None
+        _writer_started = False
+    q.put(_SHUTDOWN)
     # Best-effort: the writer thread is daemon, so we don't join.
     # Give it a moment to drain.
     deadline = time.monotonic() + timeout
-    while not _write_q.empty() and time.monotonic() < deadline:
+    while not q.empty() and time.monotonic() < deadline:
         time.sleep(0.05)
 
 
@@ -235,9 +285,9 @@ def record_mcp_call(
         ctx.ip if ctx else None,
         _truncate(ctx.user_agent if ctx else None, 500),
         tool_name,
-        _truncate(json.dumps(arguments or {}, default=str)),
+        _truncate(_scrub(json.dumps(arguments or {}, default=str))),
         1 if success else 0,
-        _truncate(error, 1000),
+        _truncate(_scrub(error), 1000),
         duration_ms,
     )
     _enqueue(_MCP_INSERT, params)
@@ -254,7 +304,7 @@ def record_dashboard_event(
         _truncate(ctx.user_agent if ctx else None, 500),
         ctx.path if ctx else None,
         event_type,
-        _truncate(json.dumps(details or {}, default=str)),
+        _truncate(_scrub(json.dumps(details or {}, default=str))),
     )
     _enqueue(_DASH_INSERT, params)
 
@@ -306,6 +356,22 @@ def query_dashboard_events(limit: int = 200) -> list[dict[str, Any]]:
 
 
 def summary() -> dict[str, Any]:
+    """Aggregate counts for /stats, cached for _SUMMARY_TTL_SEC.
+
+    Callers get a fresh dict each time (the handler mutates it to redact IP
+    lists for unauthenticated viewers), so the cache is never handed out
+    directly.
+    """
+    global _summary_cache
+    now = time.monotonic()
+    if _summary_cache is not None and _summary_cache[0] > now:
+        return json.loads(json.dumps(_summary_cache[1]))
+    data = _summary_uncached()
+    _summary_cache = (now + _SUMMARY_TTL_SEC, data)
+    return json.loads(json.dumps(data))
+
+
+def _summary_uncached() -> dict[str, Any]:
     with _lock:
         conn = _ensure_db()
         mcp_total = conn.execute("SELECT COUNT(*) FROM mcp_calls").fetchone()[0]

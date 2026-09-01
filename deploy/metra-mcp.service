@@ -1,45 +1,49 @@
 [Unit]
 Description=Metra MCP Server
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-# Required: get a token from https://metra.com/metra-gtfs-api
-Environment=METRA_API_TOKEN=replace-me
-
-# Optional: enables the /copilot web chat UI
-# Environment=ANTHROPIC_API_KEY=sk-ant-...
-
-# Optional: override stats DB location (default /var/lib/metra-mcp/stats.db)
-# Environment=METRA_STATS_DB=/var/lib/metra-mcp/stats.db
-
-# Optional: override the public URL the Anthropic API calls back to.
-# Auto-detected from request headers when running behind a reverse proxy.
-# Environment=METRA_PUBLIC_MCP_URL=https://metra.example.com/mcp
-
-# Comma-separated IPs/CIDRs allowed to set X-Forwarded-For / X-Real-IP /
-# CF-Connecting-IP. Defaults to loopback only. Add your reverse proxy /
-# cloudflared peer IPs here. Forwarding headers from any other peer are
-# ignored, preventing /stats source-IP spoofing.
-# Environment=METRA_TRUSTED_PROXIES=127.0.0.1,::1
-
-# Optional: background GTFS freshness check interval (default 21600s = 6h)
-# Environment=METRA_REFRESH_INTERVAL_SEC=21600
-
-# Optional: token unlocking client IPs / user-agents on /api/stats
-# (visit /stats?token=<value>). Redacted for everyone else.
-# Environment=METRA_STATS_TOKEN=replace-me
+# Secrets live in a root-only env file, not in the unit (unit files are
+# world-readable). Create it with mode 0600:
+#   METRA_API_TOKEN=...        required; https://metra.com/metra-gtfs-api
+#   ANTHROPIC_API_KEY=...      optional; enables the /copilot chat UI
+#   METRA_STATS_TOKEN=...      optional; unlocks IPs/user-agents on /stats?token=
+EnvironmentFile=/etc/metra-mcp/env
 
 Environment=MCP_HOST=0.0.0.0
 Environment=MCP_PORT=8080
 
-# Adjust paths to match your install
+# Public URL the Anthropic API calls back into for /copilot. Set it explicitly
+# rather than letting the server derive it from the request Host header.
+# Environment=METRA_PUBLIC_MCP_URL=https://metra.example.com/mcp
+
+# Hostnames the MCP endpoints will answer for (421 otherwise). Add localhost:*
+# if you probe the box directly.
+# Environment=METRA_ALLOWED_HOSTS=metra.example.com,localhost:*
+
+# Comma-separated IPs/CIDRs allowed to set forwarding headers. Add your reverse
+# proxy / cloudflared peer IPs. Pin the header your proxy sets authoritatively.
+# Environment=METRA_TRUSTED_PROXIES=127.0.0.1,::1
+# Environment=METRA_CLIENT_IP_HEADER=cf-connecting-ip
+
+# Optional: background GTFS freshness check interval (default 21600s = 6h)
+# Environment=METRA_REFRESH_INTERVAL_SEC=21600
+
+# Optional: /api/chat spend guards (see .env.example)
+# Environment=METRA_CHAT_GLOBAL_DAILY_MAX=400
+
+# Adjust paths to match your install. With StateDirectory= set, the schedule
+# cache and stats DB default to /var/lib/metra-mcp/{cache,stats.db}.
 ExecStart=/opt/metra-mcp/venv/bin/metra-mcp --http
 WorkingDirectory=/opt/metra-mcp
 Restart=always
 RestartSec=5
 # Give shutdown a moment to drain the stats write queue and close clients.
 TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
 
 # Hardening
 DynamicUser=yes
@@ -48,6 +52,19 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

@@ -77,8 +77,10 @@ When `--http` is set the server binds `0.0.0.0:8080` (override with
 - `GET /` — documentation page
 - `GET /copilot` — chat UI (requires `ANTHROPIC_API_KEY`)
 - `GET /stats` — usage dashboard
+- `GET /health` — liveness/readiness JSON
 - `POST /mcp` — streamable HTTP transport
-- `GET /sse` + `POST /messages/` — SSE transport
+- `GET /sse` + `POST /messages/` — legacy SSE transport (opt-in via
+  `METRA_ENABLE_LEGACY_SSE=1`; deprecated upstream)
 - `POST /api/chat` — proxy used by `/copilot`
 
 See [`.env.example`](.env.example) for all environment variables.
@@ -91,8 +93,29 @@ Behind a reverse proxy (Caddy, nginx, Cloudflare Tunnel, etc.), make sure
 auto-detected public MCP URL work correctly.
 
 The chat proxy at `/api/chat` configures the Anthropic API to call your MCP
-server back at `request.scheme://request.host/mcp` by default. Override with
-`METRA_PUBLIC_MCP_URL` if auto-detection is wrong.
+server back at `request.scheme://request.host/mcp` by default. Set
+`METRA_PUBLIC_MCP_URL` explicitly in production, and set `METRA_ALLOWED_HOSTS`
+so the MCP endpoints reject requests for hostnames you don't serve.
+
+The proxy spends your Anthropic key. Besides the built-in per-IP and global
+daily limits (`METRA_CHAT_RATE_MAX`, `METRA_CHAT_GLOBAL_DAILY_MAX`), set a
+spend limit on the key in the Anthropic Console.
+
+## Frontend build
+
+`/copilot` is a small React app. The JSX source is `src/metra_mcp/web/app.jsx`;
+the served file is the prebuilt `app.js` next to it (no in-browser Babel).
+After editing `app.jsx`, rebuild with:
+
+```bash
+npx -y -p @babel/core -p @babel/cli -p @babel/preset-react \
+  babel --presets @babel/preset-react src/metra_mcp/web/app.jsx -o src/metra_mcp/web/app.js
+```
+
+React, ReactDOM, DOMPurify and the Tailwind runtime are vendored under
+`src/metra_mcp/web/vendor/` and served from this origin, so the pages run under
+a `script-src 'self'` Content-Security-Policy with no third-party CDN in the
+trust chain.
 
 ## Data sources
 

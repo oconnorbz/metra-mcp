@@ -7,20 +7,14 @@ trip updates (arrival predictions), and service alerts.
 import asyncio
 import logging
 import os
-import ssl
 import time
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from datetime import datetime
 from typing import Any
 
 import httpx
 from google.transit import gtfs_realtime_pb2
 
-try:
-    from zoneinfo import ZoneInfo
-    CHICAGO_TZ = ZoneInfo("America/Chicago")
-except ImportError:
-    CHICAGO_TZ = timezone(timedelta(hours=-5))
+from .common import CHICAGO_TZ, get_ssl_context
 
 
 def _ts_to_chicago(unix_ts: int | None) -> str | None:
@@ -31,17 +25,18 @@ def _ts_to_chicago(unix_ts: int | None) -> str | None:
     return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def _get_ssl_context() -> ssl.SSLContext | bool:
-    """Get SSL context using SSL_CERT_FILE if set, for Netskope compatibility."""
-    cert_file = os.environ.get("SSL_CERT_FILE")
-    if cert_file and Path(cert_file).exists():
-        ctx = ssl.create_default_context(cafile=cert_file)
-        return ctx
-    return True
-
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://gtfspublic.metrarr.com/gtfs/public"
+
+
+class MetraAPIError(RuntimeError):
+    """Upstream Metra API failure, with the request URL (and therefore the
+    api_token query parameter) deliberately left out of the message.
+
+    httpx's own exceptions embed the full URL, which would otherwise flow
+    into tool error text, the stats DB, and logs.
+    """
 
 # Metra refreshes these feeds roughly every 30–60s, so a short cache cuts
 # upstream load and latency (especially get_train_status, which hits all
@@ -63,7 +58,7 @@ class MetraRealtimeClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30.0, verify=_get_ssl_context())
+            self._client = httpx.AsyncClient(timeout=30.0, verify=get_ssl_context())
         return self._client
 
     async def _fetch_feed(self, endpoint: str) -> gtfs_realtime_pb2.FeedMessage:
@@ -87,10 +82,29 @@ class MetraRealtimeClient:
 
             client = await self._get_client()
             url = f"{BASE_URL}/{endpoint}"
-            resp = await client.get(url, params={"api_token": self.api_token})
-            resp.raise_for_status()
+            try:
+                resp = await client.get(url, params={"api_token": self.api_token})
+            except httpx.TimeoutException:
+                raise MetraAPIError(
+                    f"Metra realtime API timed out fetching {endpoint}"
+                ) from None
+            except httpx.HTTPError as e:
+                # Never let the httpx message (which contains the URL) escape.
+                raise MetraAPIError(
+                    f"Metra realtime API request failed for {endpoint}: {type(e).__name__}"
+                ) from None
+            if resp.status_code >= 400:
+                raise MetraAPIError(
+                    f"Metra realtime API returned HTTP {resp.status_code} for {endpoint}"
+                )
             feed = gtfs_realtime_pb2.FeedMessage()
-            feed.ParseFromString(resp.content)
+            try:
+                feed.ParseFromString(resp.content)
+            except Exception as e:
+                raise MetraAPIError(
+                    f"Metra realtime API returned an unparseable {endpoint} feed: "
+                    f"{type(e).__name__}"
+                ) from None
             if _FEED_TTL_SEC > 0:
                 self._feed_cache[endpoint] = (time.monotonic() + _FEED_TTL_SEC, feed)
             return feed
@@ -117,8 +131,10 @@ class MetraRealtimeClient:
                 "trip_id": vp.trip.trip_id if vp.HasField("trip") else "",
                 "latitude": vp.position.latitude,
                 "longitude": vp.position.longitude,
-                "bearing": vp.position.bearing if vp.position.bearing else None,
-                "speed": vp.position.speed if vp.position.speed else None,
+                # HasField, not truthiness: a bearing of 0 is due north and a
+                # speed of 0 is a stopped train, neither of which is "unknown".
+                "bearing": vp.position.bearing if vp.position.HasField("bearing") else None,
+                "speed": vp.position.speed if vp.position.HasField("speed") else None,
                 "current_stop_sequence": vp.current_stop_sequence or None,
                 "stop_id": vp.stop_id or None,
                 "current_status": _vehicle_status(vp.current_status),
