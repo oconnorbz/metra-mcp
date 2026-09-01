@@ -12,10 +12,20 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from mcp.server import Server
+import jsonschema
+from mcp.server import Server, ServerRequestContext
 from mcp.server.stdio import stdio_server
-from mcp.types import CallToolResult, Icon, TextContent, Tool
+from mcp.types import (
+    CallToolRequestParams,
+    CallToolResult,
+    Icon,
+    ListToolsResult,
+    PaginatedRequestParams,
+    TextContent,
+    Tool,
+)
 
+from . import __version__
 from .client import MetraRealtimeClient
 from .gtfs import GTFSData
 from . import stats
@@ -31,6 +41,7 @@ _METRA_ICON_SRC = "data:image/png;base64," + base64.b64encode(_METRA_SQUARE_PNG_
 
 server = Server(
     "metra",
+    version=__version__,
     instructions=(
         "Metra commuter rail MCP server. Provides real-time train positions, "
         "arrival predictions, service alerts, and static schedule data for all "
@@ -203,258 +214,264 @@ _ROUTE_SCHEMA = {
 }
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
+_TOOL_DEFS: list[Tool] = [
+    Tool(
+        name="get_routes",
+        description="List all Metra routes/lines (e.g. BNSF, UP-N, Metra Electric, etc.).",
+        inputSchema={"type": "object", "properties": {}},
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "routes": {"type": "array", "items": _ROUTE_SCHEMA},
+                "count": {"type": "integer"},
+            },
+            "required": ["routes", "count"],
+        },
+    ),
+    Tool(
+        name="get_stops",
+        description="List Metra stops/stations. Optionally filter by route_id (e.g. 'BNSF', 'UP-N').",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {
+                    "type": "string",
+                    "description": "Optional route ID to filter stops (e.g. 'BNSF', 'UP-N')",
+                },
+            },
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "stops": {"type": "array", "items": _STOP_SCHEMA},
+                "count": {"type": "integer"},
+            },
+            "required": ["stops", "count"],
+        },
+    ),
+    Tool(
+        name="search_stops",
+        description="Search for Metra stops by name (case-insensitive partial match).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search string (e.g. 'union', 'oak park', 'evanston')",
+                },
+            },
+            "required": ["query"],
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "stops": {"type": "array", "items": _STOP_SCHEMA},
+                "count": {"type": "integer"},
+                "query": {"type": "string"},
+            },
+            "required": ["stops", "count", "query"],
+        },
+    ),
+    Tool(
+        name="get_schedule",
+        description="Get scheduled trips for a Metra route, optionally at a specific stop.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {
+                    "type": "string",
+                    "description": "Route ID (e.g. 'BNSF', 'UP-N', 'ME')",
+                },
+                "stop_id": {
+                    "type": "string",
+                    "description": "Optional stop ID to show times at a specific station",
+                },
+                "direction": {
+                    "type": "string",
+                    "description": (
+                        "Raw GTFS direction_id. Metra inverts the usual "
+                        "convention: '1' is inbound (toward Chicago), '0' "
+                        "is outbound (away from Chicago). Each trip also "
+                        "returns a derived 'direction' label."
+                    ),
+                },
+                "date_str": {
+                    "type": "string",
+                    "description": "Optional date in YYYY-MM-DD format. Defaults to today.",
+                },
+            },
+            "required": ["route_id"],
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {"type": "string"},
+                "stop_id": {"type": ["string", "null"]},
+                "direction": {"type": ["string", "null"]},
+                "trips": {"type": "array"},
+                "count": {"type": "integer"},
+            },
+            "required": ["route_id", "trips", "count"],
+        },
+    ),
+    Tool(
+        name="get_next_trains",
+        description="Get the next scheduled trains departing from a stop.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "stop_id": {
+                    "type": "string",
+                    "description": "The stop ID (use search_stops to find it)",
+                },
+                "route_id": {
+                    "type": "string",
+                    "description": "Optional route filter",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default 5)",
+                    "default": 5,
+                },
+            },
+            "required": ["stop_id"],
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "stop_id": {"type": "string"},
+                "stop_name": {"type": "string"},
+                "upcoming_trains": {"type": "array"},
+                "count": {"type": "integer"},
+            },
+            "required": ["stop_id", "upcoming_trains", "count"],
+        },
+    ),
+    Tool(
+        name="refresh_schedule",
+        description=(
+            "Re-check Metra's published GTFS timestamp and re-download the "
+            "static schedule only if it changed. Normally not needed — the "
+            "server refreshes automatically on startup and every few hours. "
+            "Use this only after Metra publishes a known mid-day schedule "
+            "change."
+        ),
+        inputSchema={"type": "object", "properties": {}},
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "status": {"type": "string"},
+                "message": {"type": "string"},
+            },
+            "required": ["status", "message"],
+        },
+    ),
+    Tool(
+        name="get_train_positions",
+        description="Get real-time GPS positions of active Metra trains.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {
+                    "type": "string",
+                    "description": "Optional route filter (e.g. 'BNSF', 'UP-N')",
+                },
+            },
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "positions": {"type": "array"},
+                "count": {"type": "integer"},
+                "route_filter": {"type": ["string", "null"]},
+            },
+            "required": ["positions", "count"],
+        },
+    ),
+    Tool(
+        name="get_trip_updates",
+        description="Get real-time arrival/departure predictions for Metra trains.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {
+                    "type": "string",
+                    "description": "Optional route filter (e.g. 'BNSF')",
+                },
+                "trip_id": {
+                    "type": "string",
+                    "description": "Optional specific trip ID filter",
+                },
+            },
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "trip_updates": {"type": "array"},
+                "count": {"type": "integer"},
+                "route_filter": {"type": ["string", "null"]},
+                "trip_filter": {"type": ["string", "null"]},
+            },
+            "required": ["trip_updates", "count"],
+        },
+    ),
+    Tool(
+        name="get_alerts",
+        description="Get active Metra service alerts (delays, cancellations, etc.).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {
+                    "type": "string",
+                    "description": "Optional route filter. If omitted, returns all alerts.",
+                },
+            },
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "alerts": {"type": "array"},
+                "count": {"type": "integer"},
+                "route_filter": {"type": ["string", "null"]},
+            },
+            "required": ["alerts", "count"],
+        },
+    ),
+    Tool(
+        name="get_train_status",
+        description="Get a combined status view for a Metra line: positions, delays, and alerts.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {
+                    "type": "string",
+                    "description": "Route ID (e.g. 'BNSF', 'UP-N', 'ME')",
+                },
+            },
+            "required": ["route_id"],
+        },
+        outputSchema={
+            "type": "object",
+            "properties": {
+                "route_id": {"type": "string"},
+                "active_trains": {"type": "integer"},
+                "positions": {"type": "array"},
+                "delayed_trips": {"type": "array"},
+                "alerts": {"type": "array"},
+            },
+            "required": ["route_id", "active_trains", "positions", "delayed_trips", "alerts"],
+        },
+    ),
+]
+
+_INPUT_SCHEMAS: dict[str, Any] = {t.name: t.input_schema for t in _TOOL_DEFS}
+
+
+async def list_tools(
+    ctx: ServerRequestContext, params: PaginatedRequestParams | None
+) -> ListToolsResult:
     """List all available tools."""
-    return [
-        Tool(
-            name="get_routes",
-            description="List all Metra routes/lines (e.g. BNSF, UP-N, Metra Electric, etc.).",
-            inputSchema={"type": "object", "properties": {}},
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "routes": {"type": "array", "items": _ROUTE_SCHEMA},
-                    "count": {"type": "integer"},
-                },
-                "required": ["routes", "count"],
-            },
-        ),
-        Tool(
-            name="get_stops",
-            description="List Metra stops/stations. Optionally filter by route_id (e.g. 'BNSF', 'UP-N').",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {
-                        "type": "string",
-                        "description": "Optional route ID to filter stops (e.g. 'BNSF', 'UP-N')",
-                    },
-                },
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "stops": {"type": "array", "items": _STOP_SCHEMA},
-                    "count": {"type": "integer"},
-                },
-                "required": ["stops", "count"],
-            },
-        ),
-        Tool(
-            name="search_stops",
-            description="Search for Metra stops by name (case-insensitive partial match).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search string (e.g. 'union', 'oak park', 'evanston')",
-                    },
-                },
-                "required": ["query"],
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "stops": {"type": "array", "items": _STOP_SCHEMA},
-                    "count": {"type": "integer"},
-                    "query": {"type": "string"},
-                },
-                "required": ["stops", "count", "query"],
-            },
-        ),
-        Tool(
-            name="get_schedule",
-            description="Get scheduled trips for a Metra route, optionally at a specific stop.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {
-                        "type": "string",
-                        "description": "Route ID (e.g. 'BNSF', 'UP-N', 'ME')",
-                    },
-                    "stop_id": {
-                        "type": "string",
-                        "description": "Optional stop ID to show times at a specific station",
-                    },
-                    "direction": {
-                        "type": "string",
-                        "description": (
-                            "Raw GTFS direction_id. Metra inverts the usual "
-                            "convention: '1' is inbound (toward Chicago), '0' "
-                            "is outbound (away from Chicago). Each trip also "
-                            "returns a derived 'direction' label."
-                        ),
-                    },
-                    "date_str": {
-                        "type": "string",
-                        "description": "Optional date in YYYY-MM-DD format. Defaults to today.",
-                    },
-                },
-                "required": ["route_id"],
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {"type": "string"},
-                    "stop_id": {"type": ["string", "null"]},
-                    "direction": {"type": ["string", "null"]},
-                    "trips": {"type": "array"},
-                    "count": {"type": "integer"},
-                },
-                "required": ["route_id", "trips", "count"],
-            },
-        ),
-        Tool(
-            name="get_next_trains",
-            description="Get the next scheduled trains departing from a stop.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "stop_id": {
-                        "type": "string",
-                        "description": "The stop ID (use search_stops to find it)",
-                    },
-                    "route_id": {
-                        "type": "string",
-                        "description": "Optional route filter",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of results (default 5)",
-                        "default": 5,
-                    },
-                },
-                "required": ["stop_id"],
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "stop_id": {"type": "string"},
-                    "stop_name": {"type": "string"},
-                    "upcoming_trains": {"type": "array"},
-                    "count": {"type": "integer"},
-                },
-                "required": ["stop_id", "upcoming_trains", "count"],
-            },
-        ),
-        Tool(
-            name="refresh_schedule",
-            description=(
-                "Re-check Metra's published GTFS timestamp and re-download the "
-                "static schedule only if it changed. Normally not needed — the "
-                "server refreshes automatically on startup and every few hours. "
-                "Use this only after Metra publishes a known mid-day schedule "
-                "change."
-            ),
-            inputSchema={"type": "object", "properties": {}},
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string"},
-                    "message": {"type": "string"},
-                },
-                "required": ["status", "message"],
-            },
-        ),
-        Tool(
-            name="get_train_positions",
-            description="Get real-time GPS positions of active Metra trains.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {
-                        "type": "string",
-                        "description": "Optional route filter (e.g. 'BNSF', 'UP-N')",
-                    },
-                },
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "positions": {"type": "array"},
-                    "count": {"type": "integer"},
-                    "route_filter": {"type": ["string", "null"]},
-                },
-                "required": ["positions", "count"],
-            },
-        ),
-        Tool(
-            name="get_trip_updates",
-            description="Get real-time arrival/departure predictions for Metra trains.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {
-                        "type": "string",
-                        "description": "Optional route filter (e.g. 'BNSF')",
-                    },
-                    "trip_id": {
-                        "type": "string",
-                        "description": "Optional specific trip ID filter",
-                    },
-                },
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "trip_updates": {"type": "array"},
-                    "count": {"type": "integer"},
-                    "route_filter": {"type": ["string", "null"]},
-                    "trip_filter": {"type": ["string", "null"]},
-                },
-                "required": ["trip_updates", "count"],
-            },
-        ),
-        Tool(
-            name="get_alerts",
-            description="Get active Metra service alerts (delays, cancellations, etc.).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {
-                        "type": "string",
-                        "description": "Optional route filter. If omitted, returns all alerts.",
-                    },
-                },
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "alerts": {"type": "array"},
-                    "count": {"type": "integer"},
-                    "route_filter": {"type": ["string", "null"]},
-                },
-                "required": ["alerts", "count"],
-            },
-        ),
-        Tool(
-            name="get_train_status",
-            description="Get a combined status view for a Metra line: positions, delays, and alerts.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {
-                        "type": "string",
-                        "description": "Route ID (e.g. 'BNSF', 'UP-N', 'ME')",
-                    },
-                },
-                "required": ["route_id"],
-            },
-            outputSchema={
-                "type": "object",
-                "properties": {
-                    "route_id": {"type": "string"},
-                    "active_trains": {"type": "integer"},
-                    "positions": {"type": "array"},
-                    "delayed_trips": {"type": "array"},
-                    "alerts": {"type": "array"},
-                },
-                "required": ["route_id", "active_trains", "positions", "delayed_trips", "alerts"],
-            },
-        ),
-    ]
+    return ListToolsResult(tools=_TOOL_DEFS)
 
 
 def _tool_result(summary: str, data: dict[str, Any]) -> CallToolResult:
@@ -465,16 +482,34 @@ def _tool_result(summary: str, data: dict[str, Any]) -> CallToolResult:
     )
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
+async def call_tool(
+    ctx: ServerRequestContext, params: CallToolRequestParams
+) -> CallToolResult:
     """Handle tool calls."""
     import time
+    name = params.name
+    arguments = params.arguments or {}
+
+    # mcp 1.x validated arguments against inputSchema inside the
+    # @server.call_tool() decorator; 2.x handlers must do it themselves.
+    schema = _INPUT_SCHEMAS.get(name)
+    if schema is not None:
+        try:
+            jsonschema.validate(instance=arguments, schema=schema)
+        except jsonschema.ValidationError as e:
+            return CallToolResult(
+                content=[
+                    TextContent(type="text", text=f"Input validation error: {e.message}")
+                ],
+                isError=True,
+            )
+
     t0 = time.monotonic()
     try:
         result = await _dispatch(name, arguments)
         stats.record_mcp_call(
             name, arguments,
-            success=not getattr(result, "isError", False),
+            success=not result.is_error,
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
         return result
@@ -489,6 +524,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> CallToolResult:
             content=[TextContent(type="text", text=f"Error: {e}")],
             isError=True,
         )
+
+
+# mcp 2.x registers handlers explicitly; the 1.x decorators are gone.
+server.add_request_handler("tools/list", PaginatedRequestParams, list_tools)
+server.add_request_handler("tools/call", CallToolRequestParams, call_tool)
 
 
 async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
