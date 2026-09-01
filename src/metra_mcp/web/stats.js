@@ -19,6 +19,10 @@ async function loadSummary() {
   const r = await api("/api/stats/summary");
   const s = await r.json();
   const m = s.mcp, d = s.dashboard;
+  // The API omits IP lists entirely (not just empties them) when no valid
+  // stats token was presented — tell the viewer that, rather than "no data".
+  const redacted = !("top_ips" in m);
+  const hiddenRow = (cols) => `<tr><td colspan="${cols}" class="muted">hidden &mdash; IPs require the stats token (open /stats?token=&hellip;)</td></tr>`;
   m.top_ips = m.top_ips || [];
   d.top_ips = d.top_ips || [];
   $("mcp-total").textContent = m.total.toLocaleString();
@@ -33,13 +37,13 @@ async function loadSummary() {
     : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
   $("top-mcp-ips").innerHTML = m.top_ips.length
     ? m.top_ips.map(i => `<tr><td class="ip">${esc(i.ip)}</td><td class="num">${i.count}</td></tr>`).join("")
-    : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
+    : redacted ? hiddenRow(2) : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
   $("top-dash-paths").innerHTML = d.top_paths.length
     ? d.top_paths.map(p => `<tr><td>${esc(p.path)}</td><td>${esc(p.event_type)}</td><td class="num">${p.count}</td></tr>`).join("")
     : `<tr><td colspan="3" class="muted">no data yet</td></tr>`;
   $("top-dash-ips").innerHTML = d.top_ips.length
     ? d.top_ips.map(i => `<tr><td class="ip">${esc(i.ip)}</td><td class="num">${i.count}</td></tr>`).join("")
-    : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
+    : redacted ? hiddenRow(2) : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
 }
 
 let mcpRows = [], dashRows = [];
@@ -65,12 +69,12 @@ function renderMcp() {
     ? rows.map(r => `
       <tr>
         <td class="ts">${esc(fmtTs(r.ts))}</td>
-        <td class="ip">${esc(r.ip || "—")}</td>
+        <td class="ip">${"ip" in r ? esc(r.ip || "—") : "hidden"}</td>
         <td class="tool">${esc(r.tool_name)}</td>
         <td class="args">${esc(r.arguments || "{}")}</td>
         <td>${r.success ? '<span class="badge badge-ok">OK</span>' : `<span class="badge badge-err">ERR</span> <span class="error">${esc(r.error || "")}</span>`}</td>
         <td class="num">${r.duration_ms != null ? r.duration_ms + "ms" : "—"}</td>
-        <td class="ua" title="${esc(r.user_agent || "")}">${esc(r.user_agent || "—")}</td>
+        <td class="ua" title="${esc(r.user_agent || "")}">${"user_agent" in r ? esc(r.user_agent || "—") : "hidden"}</td>
       </tr>
     `).join("")
     : `<tr><td colspan="7" class="muted">no MCP calls yet</td></tr>`;
@@ -83,11 +87,11 @@ function renderDash() {
     ? rows.map(r => `
       <tr>
         <td class="ts">${esc(fmtTs(r.ts))}</td>
-        <td class="ip">${esc(r.ip || "—")}</td>
+        <td class="ip">${"ip" in r ? esc(r.ip || "—") : "hidden"}</td>
         <td>${esc(r.path || "—")}</td>
         <td><span class="badge ${r.event_type === 'chat_query' ? 'badge-chat' : 'badge-pv'}">${esc(r.event_type)}</span></td>
         <td class="args">${esc(r.details || "")}</td>
-        <td class="ua" title="${esc(r.user_agent || "")}">${esc(r.user_agent || "—")}</td>
+        <td class="ua" title="${esc(r.user_agent || "")}">${"user_agent" in r ? esc(r.user_agent || "—") : "hidden"}</td>
       </tr>
     `).join("")
     : `<tr><td colspan="6" class="muted">no dashboard events yet</td></tr>`;
