@@ -82,6 +82,8 @@ When `--http` is set the server binds `0.0.0.0:8080` (override with
 - `GET /sse` + `POST /messages/` — legacy SSE transport (opt-in via
   `METRA_ENABLE_LEGACY_SSE=1`; deprecated upstream)
 - `POST /api/chat` — proxy used by `/copilot`
+- `GET /api/board` — per-line active train counts and service state (public,
+  cached 60s; feeds the landing page's line board and the Copilot's line rail)
 
 See [`.env.example`](.env.example) for all environment variables.
 
@@ -101,21 +103,47 @@ The proxy spends your Anthropic key. Besides the built-in per-IP and global
 daily limits (`METRA_CHAT_RATE_MAX`, `METRA_CHAT_GLOBAL_DAILY_MAX`), set a
 spend limit on the key in the Anthropic Console.
 
-## Frontend build
+## Frontend
 
-`/copilot` is a small React app. The JSX source is `src/metra_mcp/web/app.jsx`;
-the served file is the prebuilt `app.js` next to it (no in-browser Babel).
-After editing `app.jsx`, rebuild with:
+Both pages run on the **Modernist** design system: flat, architectural, Archivo,
+a single red accent, 2px rules, zero corner radius. The tokens and component
+classes live in `src/metra_mcp/web/modernist.css`, served at `/modernist.css`.
+That file has three layers:
+
+1. the design system itself (tokens, `.btn`, `.input`, `.tag`, `.table`, …),
+2. the app chrome (`.m-*`) used by the landing page and the Copilot,
+3. the **Copilot response vocabulary** (`.mc-*`) — the only classes the model
+   is allowed to style its answers with.
+
+Layer 3 is load-bearing for security as well as looks: DOMPurify strips `style`
+attributes from model output, so a fragment can only ever render as the design
+system. The list is spelled out in `_CHAT_SYSTEM_PROMPT` in `server.py`; change
+the stylesheet and the prompt in the same commit or model output will render
+unstyled.
+
+`/` is hand-written HTML (`web/docs.html`) plus `web/docs.js` for the clipboard
+buttons, the client-snippet picker and the live line board. `/copilot` is a
+small React app: the JSX source is `web/app.jsx` and the served file is the
+prebuilt `app.js` next to it (no in-browser Babel). After editing `app.jsx`,
+rebuild with:
 
 ```bash
+echo '{ "presets": [["@babel/preset-react", { "runtime": "classic" }]] }' > /tmp/babel.json
 npx -y -p @babel/core -p @babel/cli -p @babel/preset-react \
-  babel --presets @babel/preset-react src/metra_mcp/web/app.jsx -o src/metra_mcp/web/app.js
+  babel --config-file /tmp/babel.json \
+  src/metra_mcp/web/app.jsx -o src/metra_mcp/web/app.js
 ```
 
-React, ReactDOM, DOMPurify and the Tailwind runtime are vendored under
-`src/metra_mcp/web/vendor/` and served from this origin, so the pages run under
-a `script-src 'self'` Content-Security-Policy with no third-party CDN in the
-trust chain.
+The `classic` runtime is not optional: it emits `React.createElement` against
+the global `React`. Recent Babel defaults to the automatic runtime, which emits
+`import … from "react/jsx-runtime"` — there is no bundler and no module loader
+on the page, so that build silently renders nothing.
+
+React, ReactDOM and DOMPurify are vendored under `src/metra_mcp/web/vendor/`
+and served from this origin, so the pages run under a `script-src 'self'`
+Content-Security-Policy with no third-party CDN in the trust chain and no
+inline scripts. The only third party is Google Fonts, and only for the Archivo
+stylesheet and font files, which cannot execute script.
 
 ## Data sources
 

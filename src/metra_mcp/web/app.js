@@ -1,14 +1,20 @@
 const {
   useState,
   useRef,
-  useEffect
+  useEffect,
+  useCallback
 } = React;
 
-// The system prompt is pinned server-side (/api/chat builds it); the client
-// only sends the resolved theme so the model styles for the active mode.
-
+// The system prompt is pinned server-side (/api/chat builds it). It tells the
+// model to build fragments out of the .mc-* classes in modernist.css and
+// nothing else, which is why this page ships no Tailwind and no inline styles
+// from the model.
+//
 // Model HTML is sanitized before it touches the DOM — it is built from live
-// upstream feed data, which we don't trust to be markup-safe.
+// upstream feed data (alert text etc.), which we don't trust to be markup-safe.
+// Beyond DOMPurify's defaults we also drop form controls and <style>, so a
+// prompt-injected response can't render a credential-looking form or restyle
+// the page; the design system only needs divs/spans/lists/links.
 const sanitize = html => DOMPurify.sanitize(html, {
   USE_PROFILES: {
     html: true
@@ -23,366 +29,165 @@ const escHtml = s => String(s).replace(/[&<>"']/g, ch => ({
   '"': "&quot;",
   "'": "&#39;"
 })[ch]);
-const QUICK_ACTIONS = [{
-  icon: "⚠",
-  label: "Service Alerts",
-  query: "Show all current Metra service alerts"
+const STARTERS = [{
+  kicker: "Alerts",
+  label: "Any service alerts right now?"
 }, {
-  icon: "🚂",
-  label: "BNSF Line",
-  query: "Show BNSF line status and next departing trains"
+  kicker: "Departures",
+  label: "Next trains from Ogilvie to Kenosha"
 }, {
-  icon: "📋",
-  label: "All Lines Status",
-  query: "Show status overview for all Metra lines"
+  kicker: "Status",
+  label: "Status overview for all eleven lines"
 }, {
-  icon: "📍",
-  label: "UP-NW Trains",
-  query: "Next trains on Union Pacific Northwest line"
-}, {
-  icon: "🗺",
-  label: "ME Line",
-  query: "Metra Electric line next trains and status"
-}, {
-  icon: "🔴",
-  label: "MD-W Status",
-  query: "Milwaukee District West line status and departures"
+  kicker: "Schedule",
+  label: "UP-N schedule for tomorrow morning"
 }];
 
-// ── Theme management ──
-function useTheme() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("metra-theme") || "system");
-  const [resolved, setResolved] = useState(() => {
-    const stored = localStorage.getItem("metra-theme") || "system";
-    if (stored === "system") return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    return stored;
-  });
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const update = () => {
-      const r = theme === "system" ? mq.matches ? "dark" : "light" : theme;
-      setResolved(r);
-      document.documentElement.classList.toggle("dark", r === "dark");
-    };
-    update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
-  }, [theme]);
-  useEffect(() => {
-    localStorage.setItem("metra-theme", theme);
-  }, [theme]);
-  return [theme, setTheme, resolved];
-}
-const PALETTES = {
-  dark: {
-    bg: "#09090b",
-    surface: "#111113",
-    surfaceAlt: "#18181b",
-    border: "#27272a",
-    borderAlt: "#3f3f46",
-    text: "#e4e4e7",
-    textMuted: "#a1a1aa",
-    textDim: "#71717a",
-    textFaint: "#52525b",
-    accent: "#f59e0b",
-    accentHover: "#d97706",
-    userBg: "#1e3a5f",
-    userBorder: "#1d4ed8",
-    userText: "#bfdbfe",
-    scrollbar: "#3f3f46"
-  },
-  light: {
-    bg: "#fafafa",
-    surface: "#ffffff",
-    surfaceAlt: "#f4f4f5",
-    border: "#e4e4e7",
-    borderAlt: "#d4d4d8",
-    text: "#18181b",
-    textMuted: "#52525b",
-    textDim: "#71717a",
-    textFaint: "#a1a1aa",
-    accent: "#d97706",
-    accentHover: "#b45309",
-    userBg: "#dbeafe",
-    userBorder: "#2563eb",
-    userText: "#1e3a8a",
-    scrollbar: "#a1a1aa"
-  }
-};
-function ThemeToggle({
-  theme,
-  setTheme
-}) {
-  const modes = [{
-    id: "light",
-    icon: "☀",
-    label: "Light"
-  }, {
-    id: "dark",
-    icon: "🌙",
-    label: "Dark"
-  }, {
-    id: "system",
-    icon: "💻",
-    label: "System"
-  }];
-  const current = modes.find(m => m.id === theme) || modes[2];
-  const cycle = () => {
-    const idx = modes.findIndex(m => m.id === theme);
-    setTheme(modes[(idx + 1) % modes.length].id);
-  };
-  return /*#__PURE__*/React.createElement("button", {
-    onClick: cycle,
-    title: `Theme: ${current.label} (click to cycle)`,
-    style: {
-      background: "transparent",
-      border: "1px solid var(--border)",
-      color: "var(--text-muted)",
-      width: "28px",
-      height: "28px",
-      borderRadius: "8px",
-      fontSize: "14px",
-      cursor: "pointer",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      transition: "all 0.15s"
-    },
-    onMouseEnter: e => {
-      e.currentTarget.style.borderColor = "var(--accent)";
-    },
-    onMouseLeave: e => {
-      e.currentTarget.style.borderColor = "var(--border)";
-    }
-  }, current.icon);
-}
+// Code + terminal only — the rail is a launcher, not a data table. Live
+// service state comes from /api/board and only colors the status square.
+const LINES = [["BNSF", "Aurora"], ["HC", "Joliet"], ["MD-N", "Fox Lake"], ["MD-W", "Elgin"], ["ME", "University Park"], ["NCS", "Antioch"], ["RI", "Joliet"], ["SWS", "Manhattan"], ["UP-N", "Kenosha"], ["UP-NW", "Harvard"], ["UP-W", "Elburn"]];
+const stamp = () => new Date().toLocaleTimeString("en-US", {
+  hour: "numeric",
+  minute: "2-digit"
+});
 
-// Top-down "map view" locomotive — the engine on a track, seen from above.
-// Reads as a transit-data mark, fits the live-positions theme of the app.
-function TrainIcon({
-  size = 24,
-  color = "currentColor",
-  strokeWidth = 1.6
-}) {
-  return /*#__PURE__*/React.createElement("svg", {
-    width: size,
-    height: size,
-    viewBox: "0 0 32 32",
-    fill: "none",
-    xmlns: "http://www.w3.org/2000/svg",
-    style: {
-      display: "block"
-    }
-  }, /*#__PURE__*/React.createElement("line", {
-    x1: "11",
-    y1: "2",
-    x2: "11",
-    y2: "30",
-    stroke: color,
-    strokeWidth: strokeWidth,
-    strokeLinecap: "round",
-    strokeOpacity: "0.5"
-  }), /*#__PURE__*/React.createElement("line", {
-    x1: "21",
-    y1: "2",
-    x2: "21",
-    y2: "30",
-    stroke: color,
-    strokeWidth: strokeWidth,
-    strokeLinecap: "round",
-    strokeOpacity: "0.5"
-  }), [4, 9, 14, 19, 24, 29].map(y => /*#__PURE__*/React.createElement("line", {
-    key: y,
-    x1: "9",
-    y1: y,
-    x2: "23",
-    y2: y,
-    stroke: color,
-    strokeWidth: strokeWidth * 0.8,
-    strokeLinecap: "round",
-    strokeOpacity: "0.3"
-  })), /*#__PURE__*/React.createElement("path", {
-    d: "M13 8 H19 L20 11 V22 H12 V11 Z",
-    fill: color,
-    fillOpacity: "0.18",
-    stroke: color,
-    strokeWidth: strokeWidth,
-    strokeLinejoin: "round"
-  }), /*#__PURE__*/React.createElement("rect", {
-    x: "14",
-    y: "13",
-    width: "4",
-    height: "6",
-    rx: "0.5",
-    fill: color,
-    fillOpacity: "0.55",
-    stroke: color,
-    strokeWidth: strokeWidth
-  }), /*#__PURE__*/React.createElement("path", {
-    d: "M14 8 L16 6 L18 8 Z",
-    fill: color
-  }));
-}
-function LoadingDots({
-  c
+// Some models wrap the fragment in a ```html fence — strip it so the markup
+// renders instead of displaying as literal text.
+const stripFences = s => s.trim().replace(/^```(?:html)?\s*/i, "").replace(/```\s*$/, "");
+
+// "stop_id=OTC · limit=4" from a tool's JSON input. Long values are clipped:
+// this is a trace line, not a payload dump.
+const summarizeArgs = raw => {
+  if (!raw) return "";
+  let obj;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    return "";
+  }
+  if (!obj || typeof obj !== "object") return "";
+  return Object.keys(obj).slice(0, 4).map(k => {
+    const v = obj[k];
+    const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    return `${k}=${s.length > 32 ? s.slice(0, 32) + "…" : s}`;
+  }).join(" · ");
+};
+function Meta({
+  who,
+  accent,
+  at
 }) {
   return /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      alignItems: "center",
-      gap: "12px",
-      padding: "16px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: c.surfaceAlt,
-      border: `1px solid ${c.borderAlt}`,
-      borderRadius: "12px",
-      padding: "12px 16px",
-      display: "flex",
-      alignItems: "center",
-      gap: "10px"
-    }
+    className: "m-meta"
   }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: c.accent,
-      fontSize: "11px",
-      letterSpacing: "0.15em",
-      fontFamily: "monospace"
-    }
-  }, "FETCHING LIVE DATA"), /*#__PURE__*/React.createElement("span", {
-    style: {
-      display: "flex",
-      gap: "4px"
-    }
-  }, [0, 1, 2].map(i => /*#__PURE__*/React.createElement("span", {
-    key: i,
-    style: {
-      display: "inline-block",
-      width: "5px",
-      height: "5px",
-      background: c.accent,
-      borderRadius: "50%",
-      animation: `blink 1.2s ease-in-out ${i * 0.2}s infinite`
-    }
-  })))));
+    className: accent ? "m-meta-sq m-meta-sq-accent" : "m-meta-sq"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: accent ? "m-role m-role-accent" : "m-role"
+  }, who), /*#__PURE__*/React.createElement("span", {
+    className: "m-stamp"
+  }, at));
 }
-function WelcomeScreen({
-  onAction,
-  c
+function Row({
+  msg
 }) {
+  if (msg.role === "user") {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "m-msg m-msg-user"
+    }, /*#__PURE__*/React.createElement(Meta, {
+      who: "You",
+      at: msg.at
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "m-ask"
+    }, msg.content));
+  }
+  if (msg.role === "tool") {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "m-msg"
+    }, /*#__PURE__*/React.createElement(Meta, {
+      who: "Tool call",
+      at: "MCP"
+    }), /*#__PURE__*/React.createElement("div", {
+      className: "m-toolcall"
+    }, /*#__PURE__*/React.createElement("code", null, msg.name), msg.args ? /*#__PURE__*/React.createElement("span", {
+      className: "m-toolcall-args"
+    }, msg.args) : null));
+  }
   return /*#__PURE__*/React.createElement("div", {
-    style: {
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      minHeight: "380px",
-      padding: "32px 20px",
-      textAlign: "center"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginBottom: "16px",
-      color: c.accent,
-      display: "inline-flex"
-    }
-  }, /*#__PURE__*/React.createElement(TrainIcon, {
-    size: 72
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: c.accent,
-      fontSize: "18px",
-      fontWeight: "800",
-      letterSpacing: "0.12em",
-      fontFamily: "monospace",
-      marginBottom: "4px"
-    }
-  }, "METRA COPILOT"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: c.textFaint,
-      fontSize: "11px",
-      letterSpacing: "0.08em",
-      marginBottom: "28px",
-      fontFamily: "monospace"
-    }
-  }, "CHICAGO COMMUTER RAIL \u2014 LIVE INTELLIGENCE"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: "40px",
-      height: "2px",
-      background: c.accent,
-      marginBottom: "28px"
-    }
+    className: "m-msg"
+  }, /*#__PURE__*/React.createElement(Meta, {
+    who: "Copilot",
+    accent: true,
+    at: msg.at
   }), /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: c.textMuted,
-      fontSize: "12px",
-      marginBottom: "20px"
+    className: "m-answer"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "mc",
+    dangerouslySetInnerHTML: {
+      __html: sanitize(msg.html)
     }
-  }, "Quick access \u2014 tap a line or ask anything"), /*#__PURE__*/React.createElement("div", {
+  }), msg.source ? /*#__PURE__*/React.createElement("div", {
+    className: "mc-note",
     style: {
-      display: "flex",
-      flexWrap: "wrap",
-      gap: "8px",
-      justifyContent: "center",
-      maxWidth: "480px"
+      marginTop: "14px"
     }
-  }, QUICK_ACTIONS.map((a, i) => /*#__PURE__*/React.createElement("button", {
-    key: i,
-    onClick: () => onAction(a.query),
-    style: {
-      background: c.surfaceAlt,
-      border: `1px solid ${c.borderAlt}`,
-      color: c.text,
-      padding: "8px 14px",
-      borderRadius: "20px",
-      fontSize: "12px",
-      cursor: "pointer",
-      fontFamily: "monospace",
-      transition: "all 0.15s",
-      display: "flex",
-      alignItems: "center",
-      gap: "6px"
-    },
-    onMouseEnter: e => {
-      e.currentTarget.style.borderColor = c.accent;
-      e.currentTarget.style.color = c.accent;
-    },
-    onMouseLeave: e => {
-      e.currentTarget.style.borderColor = c.borderAlt;
-      e.currentTarget.style.color = c.text;
-    }
-  }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: "13px"
-    }
-  }, a.icon), /*#__PURE__*/React.createElement("span", null, a.label)))));
+  }, msg.source) : null));
 }
 function MetraCopilot() {
-  const [theme, setTheme, resolved] = useTheme();
-  const c = PALETTES[resolved];
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const messagesEndRef = useRef(null);
+  const [alerted, setAlerted] = useState({});
+  const threadRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Keep the thread pinned to the bottom. scrollIntoView fights the fixed
+  // 100vh layout, so scroll the container itself — except on narrow screens,
+  // where the pane isn't the scroller and the document is.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: "smooth"
-    });
+    const el = threadRef.current;
+    if (!el) return;
+    if (el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight;else window.scrollTo(0, document.body.scrollHeight);
   }, [messages, loading]);
-  const sendMessage = async text => {
+
+  // Which lines currently have an alert or delay — colors the rail squares.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch("/api/board", {
+        headers: {
+          Accept: "application/json"
+        }
+      }).then(r => r.ok ? r.json() : null).then(data => {
+        if (cancelled || !data || !Array.isArray(data.lines)) return;
+        const map = {};
+        data.lines.forEach(l => {
+          map[l.code] = l.status !== "On time";
+        });
+        setAlerted(map);
+      }).catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+  const send = useCallback(async text => {
     if (!text.trim() || loading) return;
-    setError(null);
     const userMsg = {
       role: "user",
-      content: text
+      content: text,
+      at: stamp()
     };
     const history = [...messages, userMsg];
     setMessages(history);
     setInput("");
     setLoading(true);
+
+    // Rows produced by this turn, appended to `history` on every update.
+    const live = [];
+    const paint = () => setMessages([...history, ...live]);
 
     // Abort if the stream goes quiet for 2 minutes (upstream stall) rather
     // than leaving the spinner running forever.
@@ -401,8 +206,8 @@ function MetraCopilot() {
         },
         signal: controller.signal,
         body: JSON.stringify({
-          theme: resolved,
-          messages: history.map(m => ({
+          // Tool rows are local trace UI; the model never sees them back.
+          messages: history.filter(m => m.role === "user" || m.role === "assistant").map(m => ({
             role: m.role,
             content: m.content || m.html || ""
           }))
@@ -412,20 +217,20 @@ function MetraCopilot() {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error?.message || errData.error || `HTTP ${response.status}`);
       }
-
-      // Haiku sometimes wraps the fragment in a ```html fence — strip it so
-      // the markup renders instead of displaying as literal text.
-      const stripFences = s => s.trim().replace(/^```(?:html)?\s*/i, "").replace(/```\s*$/, "");
       const ctype = response.headers.get("content-type") || "";
-      let htmlContent = "";
       if (ctype.includes("text/event-stream")) {
-        // The proxy streams Anthropic SSE through verbatim; accumulate
-        // text deltas and render progressively.
+        // The proxy streams Anthropic SSE through verbatim. Content blocks
+        // arrive in order — text, MCP tool calls, more text — so rendering
+        // one row per block as it opens gives a real tool trace rather than
+        // a fabricated one.
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buf = "",
-          raw = "",
           upstreamErr = null;
+        let textRow = null,
+          textRaw = "",
+          toolRow = null,
+          toolJson = "";
         while (true) {
           const {
             done,
@@ -438,7 +243,7 @@ function MetraCopilot() {
           });
           const events = buf.split("\n\n");
           buf = events.pop();
-          let sawText = false;
+          let dirty = false;
           for (const evt of events) {
             const data = evt.split("\n").filter(l => l.startsWith("data:")).map(l => l.slice(5).trim()).join("");
             if (!data) continue;
@@ -448,268 +253,254 @@ function MetraCopilot() {
             } catch {
               continue;
             }
-            if (obj.type === "content_block_delta" && obj.delta && obj.delta.type === "text_delta") {
-              raw += obj.delta.text;
-              sawText = true;
+            if (obj.type === "content_block_start") {
+              const block = obj.content_block || {};
+              if (block.type === "text") {
+                textRow = {
+                  role: "assistant",
+                  html: "",
+                  at: stamp()
+                };
+                textRaw = "";
+                live.push(textRow);
+                dirty = true;
+              } else if (block.type === "tool_use" || block.type === "mcp_tool_use") {
+                toolRow = {
+                  role: "tool",
+                  name: block.name || "tool",
+                  args: summarizeArgs(JSON.stringify(block.input || null))
+                };
+                toolJson = "";
+                live.push(toolRow);
+                dirty = true;
+              } else {
+                // tool results and anything else stay out of the trace.
+                textRow = null;
+                toolRow = null;
+              }
+            } else if (obj.type === "content_block_delta" && obj.delta) {
+              if (obj.delta.type === "text_delta" && textRow) {
+                textRaw += obj.delta.text;
+                textRow.html = stripFences(textRaw);
+                dirty = true;
+              } else if (obj.delta.type === "input_json_delta" && toolRow) {
+                toolJson += obj.delta.partial_json || "";
+              }
+            } else if (obj.type === "content_block_stop") {
+              if (toolRow && toolJson) {
+                toolRow.args = summarizeArgs(toolJson);
+                dirty = true;
+              }
+              textRow = null;
+              toolRow = null;
             } else if (obj.type === "error" || obj.error) {
               upstreamErr = obj.error && obj.error.message || JSON.stringify(obj.error || obj);
             }
           }
-          if (sawText) {
-            const partial = stripFences(raw);
-            if (partial) setMessages([...history, {
-              role: "assistant",
-              html: partial
-            }]);
-          }
+          if (dirty) paint();
         }
         if (upstreamErr) throw new Error(upstreamErr);
-        htmlContent = stripFences(raw);
       } else {
         const data = await response.json();
-        htmlContent = stripFences((data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n"));
+        (data.content || []).forEach(b => {
+          if (b.type === "text") {
+            live.push({
+              role: "assistant",
+              html: stripFences(b.text || ""),
+              at: stamp()
+            });
+          } else if (b.type === "tool_use" || b.type === "mcp_tool_use") {
+            live.push({
+              role: "tool",
+              name: b.name || "tool",
+              args: summarizeArgs(JSON.stringify(b.input || null))
+            });
+          }
+        });
       }
-      setMessages([...history, {
-        role: "assistant",
-        html: htmlContent
-      }]);
+
+      // Provenance: which tools actually produced this answer, on the last
+      // answer row. Derived from the stream — never invented.
+      const used = [...new Set(live.filter(m => m.role === "tool").map(m => m.name))];
+      const answers = live.filter(m => m.role === "assistant");
+      if (used.length && answers.length) {
+        answers[answers.length - 1].source = `${used.join(" + ")} · ${used.length === 1 ? "1 tool call" : used.length + " tools"}`;
+      }
+      if (!live.some(m => m.role === "assistant" && m.html.trim())) {
+        live.push({
+          role: "assistant",
+          html: "<p>No answer came back from the model. Try asking again.</p>",
+          at: stamp()
+        });
+      }
+      paint();
     } catch (err) {
       const friendly = err.name === "AbortError" ? "The request stalled — live data feeds may be slow. Please try again." : err.message;
-      setError(friendly);
-      err = {
-        message: friendly
-      };
-      setMessages([...history, {
+      live.push({
         role: "assistant",
-        html: `<div class="bg-red-50 dark:bg-red-950 border border-red-300 dark:border-red-800 rounded-xl p-4 font-mono">
-          <div class="text-red-700 dark:text-red-400 font-bold text-xs tracking-widest mb-2">⚠ SYSTEM ERROR</div>
-          <div class="text-red-600 dark:text-red-300 text-xs">${escHtml(err.message)}</div>
-        </div>`
-      }]);
+        at: stamp(),
+        html: `<div class="mc-alert"><div class="mc-alert-title">System error</div>` + `<div class="mc-alert-body">${escHtml(friendly)}</div></div>`
+      });
+      paint();
     } finally {
       clearTimeout(stallTimer);
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  };
-
-  // Inject CSS variables for theme-aware styling
-  const cssVars = {
-    "--bg": c.bg,
-    "--surface": c.surface,
-    "--surface-alt": c.surfaceAlt,
-    "--border": c.border,
-    "--border-alt": c.borderAlt,
-    "--text": c.text,
-    "--text-muted": c.textMuted,
-    "--accent": c.accent
-  };
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("style", null, `
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap');
-        @keyframes blink { 0%,100%{opacity:.25;transform:scale(.7)} 50%{opacity:1;transform:scale(1)} }
-        @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
-        .metra-msg { animation: fadeIn 0.25s ease-out; }
-        .metra-input:focus { outline: none; border-color: ${c.accent} !important; box-shadow: 0 0 0 1px ${c.accent}40; }
-        .metra-send:hover:not(:disabled) { background: ${c.accentHover} !important; }
-        .metra-send:disabled { opacity: 0.4; cursor: not-allowed; }
-        .chip:hover { border-color: ${c.accent} !important; color: ${c.accent} !important; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: ${c.scrollbar}; border-radius: 4px; }
-      `), /*#__PURE__*/React.createElement("div", {
-    style: {
-      ...cssVars,
-      fontFamily: "'JetBrains Mono', 'Courier New', monospace",
-      background: c.bg,
-      borderRadius: "16px",
-      border: `1px solid ${c.border}`,
-      overflow: "hidden",
-      display: "flex",
-      flexDirection: "column",
-      minHeight: "640px",
-      transition: "background 0.15s, border-color 0.15s"
-    }
+  }, [messages, loading]);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "m-app"
   }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: c.surface,
-      borderBottom: `1px solid ${c.border}`,
-      padding: "14px 20px",
-      display: "flex",
-      alignItems: "center",
-      gap: "12px",
-      transition: "background 0.15s, border-color 0.15s"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      width: "32px",
-      height: "32px",
-      background: c.accent,
-      borderRadius: "8px",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      color: resolved === "light" ? "#ffffff" : "#000"
-    }
-  }, /*#__PURE__*/React.createElement(TrainIcon, {
-    size: 22
-  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: c.accent,
-      fontWeight: "800",
-      fontSize: "13px",
-      letterSpacing: "0.12em"
-    }
-  }, "METRA COPILOT"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: c.textFaint,
-      fontSize: "10px",
-      letterSpacing: "0.06em"
-    }
-  }, "CHICAGO COMMUTER RAIL")), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginLeft: "auto",
-      display: "flex",
-      alignItems: "center",
-      gap: "10px"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
+    className: "m-head"
+  }, /*#__PURE__*/React.createElement("a", {
+    href: "/",
+    className: "m-brand"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "m-brand-name"
+  }, "METRA COPILOT"), /*#__PURE__*/React.createElement("span", {
+    className: "m-brand-sub"
+  }, "Chicago commuter rail")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       alignItems: "center",
-      gap: "6px"
+      gap: "8px"
     }
   }, /*#__PURE__*/React.createElement("span", {
-    style: {
-      width: "7px",
-      height: "7px",
-      background: "#22c55e",
-      borderRadius: "50%",
-      display: "inline-block",
-      boxShadow: "0 0 6px #22c55e80"
-    }
+    className: "m-sq m-sq-live"
   }), /*#__PURE__*/React.createElement("span", {
     style: {
-      color: "#22c55e",
-      fontSize: "10px",
-      letterSpacing: "0.08em"
+      fontSize: "11px",
+      letterSpacing: "0.14em",
+      textTransform: "uppercase",
+      color: "var(--color-accent-700)"
     }
-  }, "LIVE")), /*#__PURE__*/React.createElement(ThemeToggle, {
-    theme: theme,
-    setTheme: setTheme
-  }))), /*#__PURE__*/React.createElement("div", {
+  }, "Live feed")), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "btn btn-secondary",
     style: {
-      flex: 1,
-      overflowY: "auto",
-      padding: "16px",
-      background: c.bg,
-      transition: "background 0.15s"
-    }
-  }, messages.length === 0 ? /*#__PURE__*/React.createElement(WelcomeScreen, {
-    onAction: sendMessage,
-    c: c
-  }) : /*#__PURE__*/React.createElement(React.Fragment, null, messages.map((msg, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "metra-msg",
-    style: {
-      marginBottom: "14px",
-      display: "flex",
-      justifyContent: msg.role === "user" ? "flex-end" : "flex-start"
-    }
-  }, msg.role === "user" ? /*#__PURE__*/React.createElement("div", {
-    style: {
-      background: c.userBg,
-      border: `1px solid ${c.userBorder}`,
-      color: c.userText,
-      padding: "10px 16px",
-      borderRadius: "16px 16px 4px 16px",
-      fontSize: "12px",
-      maxWidth: "75%",
-      lineHeight: "1.5"
-    }
-  }, msg.content) : /*#__PURE__*/React.createElement("div", {
-    dangerouslySetInnerHTML: {
-      __html: sanitize(msg.html)
+      fontSize: "11px",
+      letterSpacing: "0.1em",
+      textTransform: "uppercase"
     },
-    style: {
-      width: "100%"
+    onClick: () => {
+      setMessages([]);
+      setInput("");
+      setLoading(false);
     }
-  }))), loading && /*#__PURE__*/React.createElement(LoadingDots, {
-    c: c
+  }, "New thread")), /*#__PURE__*/React.createElement("div", {
+    className: "m-body"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "m-thread-col"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "m-thread",
+    ref: threadRef
+  }, messages.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "m-empty"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: "11px",
+      letterSpacing: "0.16em",
+      textTransform: "uppercase",
+      color: "var(--color-accent-700)",
+      marginBottom: "20px"
+    }
+  }, "Ten tools · eleven lines · realtime GTFS"), /*#__PURE__*/React.createElement("h1", null, "Ask about any train on the system."), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: "16px",
+      lineHeight: 1.5,
+      maxWidth: "50ch",
+      margin: "0 0 32px",
+      color: "color-mix(in srgb, var(--color-text) 72%, transparent)"
+    }
+  }, "Positions, delays, alerts and schedules — pulled live from Metra's public feeds through the MCP server."), /*#__PURE__*/React.createElement("div", {
+    className: "hr",
+    style: {
+      margin: "0 0 24px"
+    }
   }), /*#__PURE__*/React.createElement("div", {
-    ref: messagesEndRef
-  }))), messages.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "m-label",
     style: {
-      padding: "8px 16px",
-      borderTop: `1px solid ${c.border}`,
-      background: c.bg,
-      display: "flex",
-      gap: "6px",
-      overflowX: "auto"
+      letterSpacing: "0.14em",
+      marginBottom: "12px"
     }
-  }, QUICK_ACTIONS.map((a, i) => /*#__PURE__*/React.createElement("button", {
+  }, "Start here"), /*#__PURE__*/React.createElement("div", {
+    className: "m-starters"
+  }, STARTERS.map((s, i) => /*#__PURE__*/React.createElement("button", {
     key: i,
-    className: "chip",
-    onClick: () => sendMessage(a.query),
-    disabled: loading,
+    type: "button",
+    className: "m-starter",
+    onClick: () => send(s.label)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "m-starter-kicker"
+  }, s.kicker), /*#__PURE__*/React.createElement("span", null, s.label))))), messages.map((m, i) => /*#__PURE__*/React.createElement(Row, {
+    key: i,
+    msg: m
+  })), loading && /*#__PURE__*/React.createElement("div", {
+    className: "m-loading"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "m-loading-label"
+  }, "Fetching live data"), /*#__PURE__*/React.createElement("span", {
     style: {
-      background: "transparent",
-      border: `1px solid ${c.borderAlt}`,
-      color: c.textMuted,
-      padding: "5px 11px",
-      borderRadius: "14px",
-      fontSize: "10px",
-      cursor: "pointer",
-      whiteSpace: "nowrap",
-      flexShrink: 0,
-      fontFamily: "inherit",
-      letterSpacing: "0.05em",
-      transition: "border-color 0.15s, color 0.15s"
-    }
-  }, a.icon, " ", a.label))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      padding: "12px 16px",
-      borderTop: `1px solid ${c.border}`,
-      background: c.surface,
       display: "flex",
-      gap: "8px",
-      alignItems: "center",
-      transition: "background 0.15s, border-color 0.15s"
+      gap: "4px"
     }
+  }, [0, 0.2, 0.4].map((d, i) => /*#__PURE__*/React.createElement("span", {
+    key: i,
+    className: "m-loading-sq",
+    style: {
+      animation: `metraBlink 1.2s ease-in-out ${d}s infinite`
+    }
+  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "m-composer"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "m-composer-row"
   }, /*#__PURE__*/React.createElement("input", {
     ref: inputRef,
-    className: "metra-input",
+    className: "input",
     value: input,
     onChange: e => setInput(e.target.value),
-    onKeyDown: e => e.key === "Enter" && !e.shiftKey && sendMessage(input),
-    placeholder: "Ask about trains, schedules, alerts, stops...",
-    disabled: loading,
-    style: {
-      flex: 1,
-      background: c.bg,
-      border: `1px solid ${c.borderAlt}`,
-      color: c.text,
-      padding: "10px 14px",
-      borderRadius: "10px",
-      fontSize: "12px",
-      fontFamily: "inherit",
-      transition: "border-color 0.15s, background 0.15s, color 0.15s"
-    }
+    onKeyDown: e => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send(input);
+      }
+    },
+    placeholder: "Ask about trains, schedules, alerts, stops"
   }), /*#__PURE__*/React.createElement("button", {
-    className: "metra-send",
-    onClick: () => sendMessage(input),
-    disabled: loading || !input.trim(),
+    type: "button",
+    className: "btn btn-primary",
     style: {
-      background: c.accent,
-      color: resolved === "light" ? "#ffffff" : "#000",
-      border: "none",
-      padding: "10px 16px",
-      borderRadius: "10px",
-      fontSize: "14px",
-      fontWeight: "800",
-      cursor: "pointer",
-      transition: "background 0.15s"
+      minWidth: "108px",
+      letterSpacing: "0.08em",
+      textTransform: "uppercase"
+    },
+    onClick: () => send(input),
+    disabled: loading || !input.trim()
+  }, "Send")), /*#__PURE__*/React.createElement("div", {
+    className: "m-composer-hints"
+  }, /*#__PURE__*/React.createElement("span", null, "Enter to send"), /*#__PURE__*/React.createElement("span", null, "Responses are generated — verify before you board")))), /*#__PURE__*/React.createElement("div", {
+    className: "m-rail"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "m-label",
+    style: {
+      letterSpacing: "0.14em",
+      padding: "14px 18px",
+      borderBottom: "1px solid var(--color-divider)"
     }
-  }, "\u2197"))));
+  }, "Lines"), LINES.map(([code, terminal]) => /*#__PURE__*/React.createElement("button", {
+    key: code,
+    type: "button",
+    className: "m-rail-line",
+    onClick: () => send(`${code} line status and next departures`)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "m-rail-code"
+  }, code), /*#__PURE__*/React.createElement("span", {
+    className: "m-rail-term"
+  }, terminal), /*#__PURE__*/React.createElement("span", {
+    className: alerted[code] ? "m-rail-sq m-rail-sq-alert" : "m-rail-sq"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "m-rail-note"
+  }, "Unofficial. Data from Metra's public GTFS feeds via the Metra MCP server."))));
 }
-const root = ReactDOM.createRoot(document.querySelector("#root .app-container"));
+const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(/*#__PURE__*/React.createElement(MetraCopilot, null));

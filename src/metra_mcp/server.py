@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,7 @@ from mcp.types import (
 
 from . import __version__, stats
 from .client import MetraAPIError, MetraRealtimeClient
+from .common import CHICAGO_TZ
 from .gtfs import GTFSData
 
 logging.basicConfig(level=logging.INFO)
@@ -119,49 +120,133 @@ _CHAT_MAX_BODY_BYTES = 256 * 1024
 # real cost lever on our API key; a chat session needs nowhere near 256KB.
 _CHAT_MAX_CONTENT_CHARS = 32 * 1024
 
-# System prompt is pinned server-side — the browser only picks the theme.
+# System prompt is pinned server-side; the browser sends only the messages.
 # A client-supplied "system" field is ignored, so the endpoint can't be
 # repurposed as a general-purpose LLM proxy on our key.
+#
+# The class vocabulary below is exactly what web/modernist.css defines under
+# "Copilot response vocabulary". DOMPurify strips style attributes from model
+# output, so a fragment can only ever look like the design system — which is
+# also why the page no longer ships Tailwind. Change this list and the
+# stylesheet together.
 _CHAT_SYSTEM_PROMPT = """You are Metra Copilot — a real-time Chicago commuter rail assistant with access to live Metra MCP tools. Always use Metra tools to fetch live data before responding.
 
-CRITICAL RULE: Your ENTIRE response must be a single valid HTML fragment using Tailwind CSS utility classes. Never output plain text, markdown, or explanation outside of HTML. The HTML will be rendered directly in a transit UI that supports both light and dark themes.
+CRITICAL RULE: Your ENTIRE response must be a single valid HTML fragment. Never output plain text, markdown, or explanation outside of HTML. Style it ONLY with the class names listed below — inline style attributes are stripped before rendering, and no other CSS framework is loaded, so any other class name renders unstyled.
 
-THEME: The UI uses Tailwind's class-based dark mode. ALWAYS include both base (light) AND dark: prefixed classes for every color so the HTML adapts when the user toggles themes. Current theme is {theme}.
+LAYOUT CLASSES (the complete list — use nothing else):
+- <p> for prose. Plain <strong>, <em>, <ul>, <li>, <a> are fine and inherit the page style.
+- class="mc-h" — a small uppercase section label above a block.
+- Departure board: <div class="mc-board"> containing <div class="mc-board-head"><span class="mc-board-title">OGILVIE → KENOSHA</span><span class="mc-board-stamp">5:41 PM CT</span></div>, then one <div class="mc-row"> per departure holding <span class="mc-time">5:53</span><span class="mc-dest">Kenosha — Train 349</span> and a status tag.
+- Alert: <div class="mc-alert"><div class="mc-alert-title">SIGNAL WORK</div><div class="mc-alert-body">…</div></div>
+- Card grid (line overviews): <div class="mc-grid"> with <div class="mc-cell"><div class="mc-cell-title">UP-N</div>…</div> per line.
+- Key/value list: <div class="mc-list"> with <div class="mc-item"><span class="mc-key">TERMINAL</span><span>Kenosha</span></div> per row.
+- Footer note (timestamps, counts): <div class="mc-note">Feed timestamp 5:41 PM CT</div>
 
-DESIGN SYSTEM (follow exactly — every color needs base + dark: variant):
-- Outer wrapper: <div class="font-mono text-sm">
-- Cards: bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-700/60 p-4
-- Section headers: text-amber-600 dark:text-amber-400 font-bold text-xs tracking-widest uppercase mb-3
-- Line names: text-zinc-900 dark:text-white font-bold
-- On-time / good: text-emerald-600 dark:text-emerald-400
-- Delayed / alert: text-red-600 dark:text-red-400
-- Warning: text-amber-600 dark:text-amber-400
-- Muted info: text-zinc-600 dark:text-zinc-400
-- Departure rows: flex justify-between border-b border-zinc-200 dark:border-zinc-800 py-2
-- Status badges: inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold
+STATUS TAGS — exactly two variants, nothing else:
+- On time / normal: <span class="tag tag-neutral">On time</span>
+- Delayed, cancelled, alert, any exception: <span class="tag tag-accent">12 min late</span>
 
-STATUS BADGE COLORS (always include both variants):
-- On Time: bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800
-- Delayed: bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-400 border border-red-300 dark:border-red-800
-- Alert: bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-800
-- Cancelled: bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-400 dark:border-zinc-600
-
-For departures/schedules, use a departure board layout:
-<div class="font-mono">
-  <div class="grid grid-cols-3 text-zinc-500 dark:text-zinc-500 text-xs border-b border-zinc-200 dark:border-zinc-700 pb-2 mb-1">
-    <span>DEPARTS</span><span>TRAIN</span><span class="text-right">STATUS</span>
-  </div>
-  [rows]
-</div>
-
-For alerts, stack colored alert cards.
-For line status overview, use a grid of line status cards.
-For route/stop info, use clean list layouts.
+The design is flat, editorial and monochrome with a single red accent. Do not attempt colored text, emoji, icons or rounded cards — squares, rules and type do the work.
 
 TOOL EFFICIENCY: Use the fewest tool calls that answer the question — typically one search_stops per station name the user gives, then one data call (get_next_trains, get_schedule, or get_alerts). Do not re-verify results with extra calls. Common station shorthand: "OTC" is Ogilvie Transportation Center, "CUS" is Chicago Union Station.
 
-Always end responses with a subtle footer showing the data timestamp if available.
+End responses with an mc-note carrying the data timestamp when one is available.
 Keep HTML compact but data-rich. No lorem ipsum or placeholder text — use real fetched data only."""
+# The eleven lines, in the order Metra publishes them, with the outer
+# terminal each one runs to. Names and terminals are static facts about the
+# system; everything else on the board (/api/board) comes from the live feeds.
+_BOARD_LINES: tuple[tuple[str, str, str], ...] = (
+    ("BNSF", "Burlington Northern Santa Fe", "Aurora"),
+    ("HC", "Heritage Corridor", "Joliet"),
+    ("MD-N", "Milwaukee District North", "Fox Lake"),
+    ("MD-W", "Milwaukee District West", "Elgin"),
+    ("ME", "Metra Electric", "University Park"),
+    ("NCS", "North Central Service", "Antioch"),
+    ("RI", "Rock Island", "Joliet"),
+    ("SWS", "Southwest Service", "Manhattan"),
+    ("UP-N", "Union Pacific North", "Kenosha"),
+    ("UP-NW", "Union Pacific Northwest", "Harvard / McHenry"),
+    ("UP-W", "Union Pacific West", "Elburn"),
+)
+# A trip is "delayed" past this many seconds; below it the line still reads
+# on time, which matches how Metra's own boards treat a minute or two.
+_BOARD_DELAY_SEC = 300
+# Most of what Metra publishes as an "alert" is an advisory — an elevator out
+# of service, station construction, a parking lot being resurfaced. Only these
+# effects actually change the service a rider gets, and only they turn a line
+# red on the board; everything else would make the board permanently red and
+# therefore meaningless.
+_BOARD_ALERT_EFFECTS = frozenset({
+    "NO_SERVICE",
+    "REDUCED_SERVICE",
+    "SIGNIFICANT_DELAYS",
+    "DETOUR",
+    "MODIFIED_SERVICE",
+})
+_BOARD_TTL_SEC = 60.0
+_board_cache: tuple[float, dict] | None = None
+_board_lock = asyncio.Lock()
+
+
+async def _build_board() -> dict:
+    """Per-line active train counts and service state from the live feeds.
+
+    Three unfiltered feed reads total (the realtime client caches and
+    de-duplicates them), bucketed by route here — not one request per line.
+    """
+    client = await get_rt_client()
+    positions, updates, alerts = await asyncio.gather(
+        client.get_positions(),
+        client.get_trip_updates(),
+        client.get_alerts(),
+    )
+    active: dict[str, int] = {}
+    for pos in positions:
+        rid = pos.get("route_id") or ""
+        if rid:
+            active[rid] = active.get(rid, 0) + 1
+
+    delayed: set[str] = set()
+    for upd in updates:
+        rid = upd.get("route_id") or ""
+        if not rid or rid in delayed:
+            continue
+        for stu in upd.get("stop_time_updates", []):
+            delay = stu.get("arrival_delay", 0) or stu.get("departure_delay", 0) or 0
+            if delay > _BOARD_DELAY_SEC:
+                delayed.add(rid)
+                break
+
+    alerted: set[str] = set()
+    for alert in alerts:
+        if alert.get("effect") not in _BOARD_ALERT_EFFECTS:
+            continue
+        for ent in alert.get("informed_entities", []):
+            rid = ent.get("route_id")
+            if rid:
+                alerted.add(rid)
+
+    lines = []
+    for code, name, terminal in _BOARD_LINES:
+        if code in alerted:
+            status = "Service alert"
+        elif code in delayed:
+            status = "Minor delays"
+        else:
+            status = "On time"
+        lines.append({
+            "code": code,
+            "name": name,
+            "terminal": terminal,
+            "active": active.get(code, 0),
+            "status": status,
+        })
+    return {
+        "lines": lines,
+        "stamp": datetime.now(CHICAGO_TZ).strftime("%-I:%M %p CT"),
+    }
+
+
 # Sliding-window per-IP limiter: max requests per window.
 _CHAT_RATE_MAX = int(os.environ.get("METRA_CHAT_RATE_MAX", "20"))
 _CHAT_RATE_WINDOW_SEC = float(os.environ.get("METRA_CHAT_RATE_WINDOW_SEC", "60"))
@@ -881,8 +966,9 @@ def main():
 
         # Browser-facing hardening. The copilot renders model output, so the
         # CSP matters most there: scripts only from this origin (React,
-        # DOMPurify, the prebuilt app), inline styles allowed because Tailwind
-        # injects a <style> at runtime and the UI carries a small inline block.
+        # DOMPurify, the prebuilt app). Inline styles stay allowed because the
+        # pages carry layout in style attributes — model output can't use them,
+        # DOMPurify strips the attribute before render.
         _SECURITY_HEADERS = [
             (b"x-content-type-options", b"nosniff"),
             (b"x-frame-options", b"DENY"),
@@ -1025,6 +1111,15 @@ def main():
         async def handle_stats_js(request):
             return FileResponse(_web_dir / "stats.js", media_type="text/javascript", headers=_APP_JS_HEADERS)
 
+        async def handle_docs_js(request):
+            return FileResponse(_web_dir / "docs.js", media_type="text/javascript", headers=_APP_JS_HEADERS)
+
+        async def handle_stylesheet(request):
+            # The design system plus the app/fragment layers. Revalidated per
+            # load like the app bundles — the model's class vocabulary and this
+            # file have to move together.
+            return FileResponse(_web_dir / "modernist.css", media_type="text/css", headers=_APP_JS_HEADERS)
+
         async def handle_vendor(request):
             # Allowlist by exact filename: no path traversal, no directory listing.
             name = request.path_params.get("name", "")
@@ -1054,6 +1149,29 @@ def main():
                     "rt_client_initialized": _rt_client is not None,
                 }
             )
+
+        async def handle_board(request):
+            """Live per-line board for the landing page and the copilot rail.
+
+            Public and unauthenticated like the pages that use it, so it is
+            cached for a minute: a burst of page loads costs one feed read.
+            """
+            global _board_cache
+            now = time.monotonic()
+            cached = _board_cache
+            if cached is not None and cached[0] > now:
+                return JSONResponse(cached[1])
+            async with _board_lock:
+                cached = _board_cache
+                if cached is not None and cached[0] > time.monotonic():
+                    return JSONResponse(cached[1])
+                try:
+                    data = await _build_board()
+                except MetraAPIError as e:
+                    logger.warning("Board unavailable: %s", e)
+                    return JSONResponse({"error": "realtime feed unavailable"}, status_code=503)
+                _board_cache = (time.monotonic() + _BOARD_TTL_SEC, data)
+            return JSONResponse(data)
 
         def _stats_full_access(request) -> bool:
             """True when the caller presented the stats token (if configured)."""
@@ -1209,14 +1327,10 @@ def main():
                     return JSONResponse({"error": "Invalid Host header"}, status_code=421)
                 public_mcp_url = f"{scheme}://{host}/mcp"
 
-            theme = body.get("theme")
-            if theme not in ("light", "dark"):
-                theme = "dark"
-
             payload = {
                 "model": model,
                 "max_tokens": max_tokens,
-                "system": _CHAT_SYSTEM_PROMPT.replace("{theme}", theme),
+                "system": _CHAT_SYSTEM_PROMPT,
                 "messages": messages,
                 # Stream the upstream response and pass SSE straight through.
                 # Tool-heavy MCP queries can sit minutes between tool rounds;
@@ -1309,6 +1423,9 @@ def main():
         routes.append(Route("/favicon.svg", endpoint=handle_favicon_png))
         routes.append(Route("/app.js", endpoint=handle_app_js))
         routes.append(Route("/stats.js", endpoint=handle_stats_js))
+        routes.append(Route("/docs.js", endpoint=handle_docs_js))
+        routes.append(Route("/modernist.css", endpoint=handle_stylesheet))
+        routes.append(Route("/api/board", endpoint=handle_board))
         routes.append(Route("/vendor/{name}", endpoint=handle_vendor))
         routes.append(Route("/api/chat", endpoint=handle_chat, methods=["POST"]))
 

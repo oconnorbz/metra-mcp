@@ -5,25 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Metra Copilot</title>
   <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
+  <link rel="stylesheet" href="/modernist.css">
   <!-- All scripts are served from this origin (see /vendor and /app.js):
        no third-party CDN can swap out React or, more importantly, DOMPurify,
        which is the only thing standing between model-generated HTML and the DOM.
-       app.js is prebuilt from app.jsx (see README "Frontend build"). -->
-  <script src="/vendor/tailwind-3.4.16.js"></script>
-  <script src="/vendor/tailwind-config.js"></script>
+       app.js is prebuilt from app.jsx (see README "Frontend build").
+       Tailwind is gone: model fragments now use the .mc-* classes defined in
+       modernist.css, which the server-side system prompt spells out. -->
   <script src="/vendor/react.production.min.js"></script>
   <script src="/vendor/react-dom.production.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
   <style>
-    body { margin: 0; min-height: 100vh; transition: background 0.15s; }
-    html.dark body { background: #09090b; }
-    html:not(.dark) body { background: #fafafa; }
-    #root { display: flex; justify-content: center; padding: 20px; }
-    .app-container { width: 100%; max-width: 720px; }
+    body { margin: 0; }
+    #root { display: block; }
   </style>
 </head>
-<body>
-  <div id="root"><div class="app-container"></div></div>
+<body class="m-page">
+  <div id="root"></div>
 
   <script src="/app.js"></script>
 </body>
