@@ -103,6 +103,33 @@ The proxy spends your Anthropic key. Besides the built-in per-IP and global
 daily limits (`METRA_CHAT_RATE_MAX`, `METRA_CHAT_GLOBAL_DAILY_MAX`), set a
 spend limit on the key in the Anthropic Console.
 
+### Routing the copilot through an LLM gateway
+
+`/api/chat` talks to `https://api.anthropic.com` by default. To put a gateway
+in front of it — for inspection, DLP, or model policy — set:
+
+```bash
+METRA_ANTHROPIC_BASE_URL=https://ai-gw.example.com
+METRA_ANTHROPIC_EXTRA_HEADERS=x-ns-aig-slug: claude
+```
+
+The proxy then POSTs to `<base>/v1/messages` and merges those headers over its
+own (so a gateway can also supply an auth header). Two requirements the
+gateway has to meet:
+
+- **Streaming.** The proxy always sets `"stream": true` and passes the SSE
+  bytes through untouched; a gateway that buffers the response will trip
+  Cloudflare's first-byte timeout on tool-heavy queries.
+- **The MCP connector beta.** Requests carry
+  `anthropic-beta: mcp-client-2025-04-04` and an `mcp_servers` block, and
+  Anthropic calls this server's `/mcp` back directly — that callback does not
+  traverse the gateway, so only the model traffic is inspected.
+
+Anything the gateway rejects comes back to the browser as an SSE `error`
+event; the frontend keys off the event name rather than the payload shape, so
+a gateway's own error JSON still renders instead of silently producing an
+empty answer.
+
 ## Frontend
 
 Both pages run on the **Modernist** design system: flat, architectural, Archivo,

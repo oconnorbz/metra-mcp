@@ -196,7 +196,9 @@ function MetraCopilot() {
           let dirty = false;
 
           for (const evt of events) {
-            const data = evt.split("\n").filter(l => l.startsWith("data:")).map(l => l.slice(5).trim()).join("");
+            const lines = evt.split("\n");
+            const evtName = (lines.find(l => l.startsWith("event:")) || "").slice(6).trim();
+            const data = lines.filter(l => l.startsWith("data:")).map(l => l.slice(5).trim()).join("");
             if (!data) continue;
             let obj;
             try { obj = JSON.parse(data); } catch { continue; }
@@ -233,8 +235,15 @@ function MetraCopilot() {
               }
               textRow = null;
               toolRow = null;
-            } else if (obj.type === "error" || obj.error) {
-              upstreamErr = (obj.error && obj.error.message) || JSON.stringify(obj.error || obj);
+            } else if (evtName === "error" || obj.type === "error" || obj.error) {
+              // The proxy wraps any upstream refusal in `event: error`. When
+              // an LLM gateway sits in front of Anthropic it answers in its
+              // own shape, so don't assume {error:{message}} — keying off the
+              // event name is what keeps a gateway 401 from rendering as an
+              // empty answer.
+              upstreamErr = (obj.error && obj.error.message)
+                || obj.err_msg
+                || JSON.stringify(obj.error || obj);
             }
           }
           if (dirty) paint();

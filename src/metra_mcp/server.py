@@ -114,6 +114,38 @@ _CHAT_DEFAULT_MODEL = os.environ.get("METRA_CHAT_MODEL", "claude-sonnet-5")
 if _CHAT_DEFAULT_MODEL not in _CHAT_MODEL_ALLOWLIST:
     _CHAT_MODEL_ALLOWLIST.add(_CHAT_DEFAULT_MODEL)
 _CHAT_MAX_TOKENS_CAP = 4096
+
+# --- Upstream for the chat proxy ---
+# Normally the Anthropic API directly. Point METRA_ANTHROPIC_BASE_URL at an
+# LLM gateway (e.g. Netskope AI Gateway at https://ai-gw.tcolab.com) to route
+# /copilot traffic through it for inspection and policy; the gateway is
+# expected to speak the Anthropic Messages API, including SSE streaming.
+# METRA_ANTHROPIC_EXTRA_HEADERS carries whatever headers that gateway needs to
+# select a route or authenticate, as comma-separated "Name: value" pairs —
+# e.g. "x-ns-aig-slug: claude". Comma-separated because the value has to
+# survive a systemd EnvironmentFile, which cannot hold newlines; header values
+# containing commas are therefore not expressible.
+_CHAT_API_BASE = os.environ.get("METRA_ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+_CHAT_API_URL = _CHAT_API_BASE + "/v1/messages"
+
+
+def _parse_header_pairs(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        name, _, value = pair.partition(":")
+        name, value = name.strip(), value.strip()
+        # Reject anything that would let a malformed env value inject a
+        # second header or a body separator into the upstream request.
+        if not name or any(c in name + value for c in "\r\n"):
+            continue
+        out[name] = value
+    return out
+
+
+_CHAT_EXTRA_HEADERS = _parse_header_pairs(os.environ.get("METRA_ANTHROPIC_EXTRA_HEADERS", ""))
 _CHAT_MAX_MESSAGES = 40
 _CHAT_MAX_BODY_BYTES = 256 * 1024
 # Cap on total message text the proxy will forward. Input tokens are the
@@ -1353,6 +1385,9 @@ def main():
                 "anthropic-version": "2023-06-01",
                 "anthropic-beta": "mcp-client-2025-04-04",
             }
+            # Gateway headers last so a deployment can override the defaults
+            # above (an auth header, a different beta set) without a code change.
+            headers.update(_CHAT_EXTRA_HEADERS)
             from starlette.responses import StreamingResponse
 
             async def event_stream():
@@ -1367,7 +1402,7 @@ def main():
                     try:
                         async with _get_chat_http().stream(
                             "POST",
-                            "https://api.anthropic.com/v1/messages",
+                            _CHAT_API_URL,
                             headers=headers,
                             json=payload,
                         ) as resp:
@@ -1489,6 +1524,15 @@ def main():
             logger.warning(
                 "Neither METRA_PUBLIC_MCP_URL nor METRA_ALLOWED_HOSTS is set; the "
                 "copilot's MCP callback URL will be derived from the request Host header."
+            )
+        if _CHAT_API_BASE != "https://api.anthropic.com":
+            # Loud on purpose: this reroutes the chat proxy's traffic (and the
+            # Anthropic key) through a third party. Header names only — values
+            # may be credentials.
+            logger.warning(
+                "Chat proxy upstream is %s (extra headers: %s)",
+                _CHAT_API_URL,
+                ", ".join(sorted(_CHAT_EXTRA_HEADERS)) or "none",
             )
         uvicorn.run(app, host=host, port=port)
     else:
