@@ -1159,17 +1159,38 @@ def main():
                 return Response("Not found", status_code=404)
             return FileResponse(_VENDOR_DIR / name, media_type="text/javascript", headers=_VENDOR_HEADERS)
 
+        # The origin sends no-cache on these, but Cloudflare caches by file
+        # extension and rewrites the browser TTL (4h by default), so a visitor
+        # can get new HTML against a stale stylesheet or bundle — which renders
+        # the page unstyled or, for app.js, not at all. Stamp each reference
+        # with the asset's mtime so a deploy changes the URL and the edge has
+        # to fetch it. Recomputed per request (three stat() calls), which keeps
+        # "push the file, it's live" true for the assets as well as the HTML.
+        _VERSIONED_ASSETS = ("/modernist.css", "/app.js", "/docs.js", "/stats.js")
+
+        def _asset_stamp(url_path: str) -> str:
+            try:
+                return format(int((_web_dir / url_path.lstrip("/")).stat().st_mtime), "x")
+            except OSError:
+                return "0"
+
+        def _html_page(path) -> Response:
+            html = path.read_text(encoding="utf-8")
+            for asset in _VERSIONED_ASSETS:
+                html = html.replace(f'"{asset}"', f'"{asset}?v={_asset_stamp(asset)}"')
+            return Response(html, media_type="text/html", headers=_HTML_HEADERS)
+
         async def handle_docs(request):
             stats.record_dashboard_event("page_view", {"page": "docs"})
-            return FileResponse(_docs_html, media_type="text/html", headers=_HTML_HEADERS)
+            return _html_page(_docs_html)
 
         async def handle_copilot(request):
             stats.record_dashboard_event("page_view", {"page": "copilot"})
-            return FileResponse(_copilot_html, media_type="text/html", headers=_HTML_HEADERS)
+            return _html_page(_copilot_html)
 
         async def handle_stats_page(request):
             stats.record_dashboard_event("page_view", {"page": "stats"})
-            return FileResponse(_stats_html, media_type="text/html", headers=_HTML_HEADERS)
+            return _html_page(_stats_html)
 
         async def handle_health(request):
             """Liveness + basic readiness for reverse proxies / monitoring."""
