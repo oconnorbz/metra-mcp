@@ -36,3 +36,6 @@ Thumbs.db
 .coverage
 htmlcov/
 .ruff_cache/
+
+# Claude Design delivery archives — the extracted bundle is committed instead
+stats redesign/*.zip

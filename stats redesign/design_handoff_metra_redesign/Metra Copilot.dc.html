@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-8880df0e-290f-411c-8e2e-70f18633acae/styles.css">
+<style>
+  body { margin: 0; }
+  a { color: var(--color-accent); }
+  a:hover { color: var(--color-accent-700); }
+  @keyframes metraBlink { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+</style>
+</helmet>
+
+<div style="background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); height: 100vh; display: flex; flex-direction: column;">
+
+  <div style="display: flex; align-items: center; gap: 20px; padding: 12px 24px; border-bottom: 2px solid var(--color-divider); flex-wrap: wrap;">
+    <a href="/" style="text-decoration: none; color: inherit; display: flex; align-items: baseline; gap: 10px; margin-right: auto;">
+      <span style="font-family: var(--font-heading); font-weight: 800; font-size: 17px; letter-spacing: -0.01em;">METRA COPILOT</span>
+      <span style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 50%, transparent);">Chicago commuter rail</span>
+    </a>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="width: 8px; height: 8px; background: var(--color-accent); display: block; animation: metraBlink 2s ease-in-out infinite;"></span>
+      <span style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-700);">Live feed</span>
+    </div>
+    <button onClick="{{ reset }}" class="btn btn-secondary" style="font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;">New thread</button>
+  </div>
+
+  <div style="flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 240px);">
+
+    <div style="display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--color-divider);">
+      <div style="flex: 1; min-height: 0; overflow-y: auto;">
+
+        <sc-if value="{{ empty }}" hint-placeholder-val="{{ true }}">
+          <div style="padding: 48px 32px; max-width: 720px;">
+            <div style="font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-accent-700); margin-bottom: 20px;">Ten tools · eleven lines · realtime GTFS</div>
+            <h1 style="font-size: clamp(32px, 5vw, 52px); line-height: 1.0; letter-spacing: -0.03em; margin: 0 0 16px; max-width: 18ch;">Ask about any train on the system.</h1>
+            <p style="font-size: 16px; line-height: 1.5; max-width: 50ch; margin: 0 0 32px; color: color-mix(in srgb, var(--color-text) 72%, transparent);">Positions, delays, alerts and schedules — pulled live from Metra's public feeds through the MCP server.</p>
+            <div class="hr" style="margin: 0 0 24px;"></div>
+            <div style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent); margin-bottom: 12px;">Start here</div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px;">
+              <sc-for list="{{ starters }}" as="s" hint-placeholder-count="4">
+                <button onClick="{{ s.send }}" style="cursor: pointer; text-align: left; background: transparent; border: 1px solid var(--color-divider); padding: 13px 15px; font: inherit; font-size: 14px; color: var(--color-text); display: flex; flex-direction: column; gap: 4px;" style-hover="border-color: var(--color-accent)">
+                  <span style="font-family: var(--font-heading); font-weight: 800; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent);">{{ s.kicker }}</span>
+                  <span>{{ s.label }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-for list="{{ thread }}" as="m" hint-placeholder-count="0">
+          <div style="border-bottom: 1px solid var(--color-divider); padding: 20px 32px; background: {{ m.bg }};">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+              <span style="width: 7px; height: 7px; display: block; background: {{ m.mark }};"></span>
+              <span style="font-family: var(--font-heading); font-weight: 800; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: {{ m.labelColor }};">{{ m.who }}</span>
+              <span style="font-size: 11px; letter-spacing: 0.08em; color: color-mix(in srgb, var(--color-text) 45%, transparent); margin-left: auto;">{{ m.stamp }}</span>
+            </div>
+
+            <sc-if value="{{ m.isUser }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size: 17px; line-height: 1.4; max-width: 60ch; font-family: var(--font-heading); font-weight: 600; letter-spacing: -0.01em;">{{ m.text }}</div>
+            </sc-if>
+
+            <sc-if value="{{ m.isTool }}" hint-placeholder-val="{{ false }}">
+              <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px;">
+                <code style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; background: var(--color-surface); border: 1px solid var(--color-divider); padding: 4px 9px;">{{ m.tool }}</code>
+                <span style="color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ m.detail }}</span>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ m.isAnswer }}" hint-placeholder-val="{{ false }}">
+              <div style="max-width: 68ch;">
+                <p style="font-size: 15px; line-height: 1.55; margin: 0 0 16px;">{{ m.text }}</p>
+                <sc-if value="{{ m.hasBoard }}" hint-placeholder-val="{{ false }}">
+                  <div style="border: 1px solid var(--color-divider); margin-bottom: 14px;">
+                    <div style="display: flex; align-items: baseline; gap: 12px; padding: 10px 14px; border-bottom: 2px solid var(--color-divider); flex-wrap: wrap;">
+                      <span style="font-family: var(--font-heading); font-weight: 800; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;">{{ m.board.title }}</span>
+                      <span style="font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 50%, transparent); margin-left: auto;">{{ m.board.stamp }}</span>
+                    </div>
+                    <sc-for list="{{ m.board.rows }}" as="r" hint-placeholder-count="3">
+                      <div style="display: grid; grid-template-columns: 68px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--color-divider);">
+                        <span style="font-family: var(--font-heading); font-weight: 800; font-size: 15px; font-variant-numeric: tabular-nums;">{{ r.time }}</span>
+                        <span style="font-size: 14px; min-width: 0;">{{ r.dest }}</span>
+                        <span class="{{ r.tagClass }}" style="letter-spacing: 0.08em; text-transform: uppercase;">{{ r.note }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ m.hasAlert }}" hint-placeholder-val="{{ false }}">
+                  <div style="border-left: 4px solid var(--color-accent); background: var(--color-accent-100); padding: 12px 16px; margin-bottom: 14px;">
+                    <div style="font-family: var(--font-heading); font-weight: 800; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-accent-800); margin-bottom: 5px;">{{ m.alert.title }}</div>
+                    <div style="font-size: 14px; line-height: 1.5; color: var(--color-accent-900);">{{ m.alert.body }}</div>
+                  </div>
+                </sc-if>
+                <div style="font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 45%, transparent);">{{ m.source }}</div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+
+        <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
+          <div style="padding: 20px 32px; display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-700);">Fetching live data</span>
+            <span style="display: flex; gap: 4px;">
+              <span style="width: 5px; height: 5px; background: var(--color-accent); display: block; animation: metraBlink 1.2s ease-in-out infinite;"></span>
+              <span style="width: 5px; height: 5px; background: var(--color-accent); display: block; animation: metraBlink 1.2s ease-in-out 0.2s infinite;"></span>
+              <span style="width: 5px; height: 5px; background: var(--color-accent); display: block; animation: metraBlink 1.2s ease-in-out 0.4s infinite;"></span>
+            </span>
+          </div>
+        </sc-if>
+
+        <div ref="{{ endRef }}"></div>
+      </div>
+
+      <div style="border-top: 2px solid var(--color-divider); padding: 14px 24px; background: var(--color-bg);">
+        <div style="display: flex; gap: 10px; align-items: stretch;">
+          <input class="input" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" placeholder="Ask about trains, schedules, alerts, stops" style="flex: 1; min-height: 46px; font-size: 15px; background: var(--color-bg); border-width: 1px;">
+          <button onClick="{{ send }}" class="btn btn-primary" style="min-width: 108px; letter-spacing: 0.08em; text-transform: uppercase;">Send</button>
+        </div>
+        <div style="display: flex; gap: 14px; margin-top: 9px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 45%, transparent); flex-wrap: wrap;">
+          <span>Enter to send</span>
+          <span>Responses are generated — verify before you board</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="overflow-y: auto; display: flex; flex-direction: column;">
+      <div style="padding: 14px 18px; border-bottom: 1px solid var(--color-divider); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">Lines</div>
+      <sc-for list="{{ lineList }}" as="l" hint-placeholder-count="11">
+        <button onClick="{{ l.send }}" style="cursor: pointer; background: transparent; border: 0; border-bottom: 1px solid var(--color-divider); padding: 11px 18px; font: inherit; color: var(--color-text); display: flex; align-items: center; gap: 10px; text-align: left; width: 100%;" style-hover="background: color-mix(in srgb, var(--color-text) 5%, transparent)">
+          <span style="font-family: var(--font-heading); font-weight: 800; font-size: 12px; letter-spacing: 0.06em; min-width: 46px;">{{ l.code }}</span>
+          <span style="font-size: 12px; color: color-mix(in srgb, var(--color-text) 60%, transparent); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ l.terminal }}</span>
+          <span style="width: 7px; height: 7px; display: block; margin-left: auto; background: {{ l.dot }};"></span>
+        </button>
+      </sc-for>
+      <div style="padding: 16px 18px; font-size: 11px; line-height: 1.5; color: color-mix(in srgb, var(--color-text) 45%, transparent);">Unofficial. Data from Metra's public GTFS feeds via the Metra MCP server.</div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showResultCards&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;showToolProvenance&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+const LINES = [
+  ["BNSF", "Aurora", 1], ["HC", "Joliet", 1], ["MD-N", "Fox Lake", 1],
+  ["MD-W", "Elgin", 0], ["ME", "University Park", 1], ["NCS", "Antioch", 1],
+  ["RI", "Joliet", 1], ["SWS", "Manhattan", 1], ["UP-N", "Kenosha", 0],
+  ["UP-NW", "Harvard", 1], ["UP-W", "Elburn", 1],
+];
+
+const STARTERS = [
+  { kicker: "Alerts", label: "Any service alerts right now?", key: "alerts" },
+  { kicker: "Departures", label: "Next trains from Ogilvie to Kenosha", key: "board" },
+  { kicker: "Status", label: "Status overview for all eleven lines", key: "status" },
+  { kicker: "Schedule", label: "UP-N schedule for tomorrow morning", key: "status" },
+];
+
+const REPLIES = {
+  board: {
+    text: "Six trains are scheduled from Ogilvie Transportation Center toward Kenosha on the UP-N line in the next two hours. Two are running behind their scheduled times.",
+    board: {
+      title: "OTC → Kenosha · UP-N",
+      stamp: "Updated 12 sec ago",
+      rows: [
+        { time: "5:44", dest: "Waukegan — train 349", note: "On time" },
+        { time: "6:02", dest: "Kenosha — train 351", note: "4 min late" },
+        { time: "6:20", dest: "Winnetka — train 353", note: "On time" },
+        { time: "6:38", dest: "Kenosha — train 355", note: "7 min late" },
+      ],
+    },
+    tool: "get_next_trains",
+    detail: "stop OTC · direction outbound · route UP-N",
+    source: "get_next_trains + get_trip_updates · 4 predictions",
+  },
+  alerts: {
+    text: "Two active alerts on the system. Everything else is reporting normal service.",
+    alert: {
+      title: "UP-N · signal work at Ravenswood",
+      body: "Trains 351 and 355 are operating up to 10 minutes behind schedule through the evening rush. Expect residual delays northbound.",
+    },
+    tool: "get_alerts",
+    detail: "all routes · active only",
+    source: "get_alerts · 2 active",
+  },
+  status: {
+    text: "Nine of eleven lines are running on time. MD-W and UP-N are reporting minor delays; 113 trains are active across the system right now.",
+    board: {
+      title: "System status",
+      stamp: "Updated 8 sec ago",
+      rows: [
+        { time: "113", dest: "Active trains system-wide", note: "Normal" },
+        { time: "9/11", dest: "Lines on time", note: "On time" },
+        { time: "2", dest: "Lines with minor delays", note: "Delays" },
+      ],
+    },
+    tool: "get_train_status",
+    detail: "positions + delays + alerts",
+    source: "get_train_status · 113 vehicles",
+  },
+};
+
+const pick = (text) => {
+  const t = text.toLowerCase();
+  if (/alert|delay|disrupt/.test(t)) return "alerts";
+  if (/next|depart|schedule|train from|to /.test(t)) return "board";
+  return "status";
+};
+
+const stamp = () => new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+
+class Component extends DCLogic {
+  state = { thread: [], draft: "", loading: false };
+  endRef = React.createRef();
+
+  componentDidUpdate() {
+    const el = this.endRef.current;
+    if (el && el.parentElement) el.parentElement.scrollTop = el.parentElement.scrollHeight;
+  }
+
+  send(text) {
+    const q = (text || "").trim();
+    if (!q || this.state.loading) return;
+    const key = pick(q);
+    const r = REPLIES[key];
+    this.setState(s => ({
+      thread: [...s.thread, { role: "user", text: q, stamp: stamp() }],
+      draft: "", loading: true,
+    }));
+    clearTimeout(this._a); clearTimeout(this._b);
+    this._a = setTimeout(() => this.setState(s => ({
+      thread: [...s.thread, { role: "tool", tool: r.tool, detail: r.detail, stamp: "MCP" }],
+    })), 550);
+    this._b = setTimeout(() => this.setState(s => ({
+      thread: [...s.thread, { role: "answer", ...r, stamp: stamp() }],
+      loading: false,
+    })), 1400);
+  }
+
+  renderVals() {
+    const showBoards = this.props.showResultCards ?? true;
+    return {
+      empty: this.state.thread.length === 0,
+      loading: this.state.loading,
+      draft: this.state.draft,
+      endRef: this.endRef,
+      onDraft: e => this.setState({ draft: e.target.value }),
+      onKey: e => { if (e.key === "Enter") this.send(this.state.draft); },
+      send: () => this.send(this.state.draft),
+      reset: () => this.setState({ thread: [], draft: "", loading: false }),
+      starters: STARTERS.map(s => ({ ...s, send: () => this.send(s.label) })),
+      lineList: LINES.map(([code, terminal, ok]) => ({
+        code, terminal,
+        dot: ok ? "var(--color-neutral-400)" : "var(--color-accent)",
+        send: () => this.send(`${code} line status and next departures`),
+      })),
+      thread: this.state.thread.map(m => ({
+        isUser: m.role === "user",
+        isTool: m.role === "tool",
+        isAnswer: m.role === "answer",
+        who: m.role === "user" ? "You" : m.role === "tool" ? "Tool call" : "Copilot",
+        stamp: m.stamp,
+        bg: m.role === "user" ? "color-mix(in srgb, var(--color-text) 4%, transparent)" : "transparent",
+        mark: m.role === "answer" ? "var(--color-accent)" : "var(--color-neutral-400)",
+        labelColor: m.role === "answer" ? "var(--color-accent-700)" : "color-mix(in srgb, var(--color-text) 55%, transparent)",
+        text: m.text,
+        tool: m.tool,
+        detail: m.detail,
+        source: this.props.showToolProvenance === false ? "" : m.source,
+        hasBoard: !!m.board && showBoards,
+        board: m.board || { title: "", stamp: "", rows: [] },
+        hasAlert: !!m.alert,
+        alert: m.alert || { title: "", body: "" },
+      })),
+    };
+  }
+}
+</script>
+</body>
+</html>

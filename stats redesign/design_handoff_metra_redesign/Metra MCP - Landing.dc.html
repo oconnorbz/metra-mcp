@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-8880df0e-290f-411c-8e2e-70f18633acae/styles.css">
+<style>
+  body { margin: 0; }
+  a { color: var(--color-accent); }
+  a:hover { color: var(--color-accent-700); }
+</style>
+</helmet>
+
+<div style="background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); min-height: 100vh;">
+
+  <div style="display: flex; align-items: center; gap: 24px; padding: 14px 32px; border-bottom: 2px solid var(--color-divider); position: sticky; top: 0; background: var(--color-bg); z-index: 10; flex-wrap: wrap;">
+    <div style="display: flex; align-items: baseline; gap: 10px; margin-right: auto;">
+      <span style="font-family: var(--font-heading); font-weight: 800; font-size: 18px; letter-spacing: -0.01em;">METRA MCP</span>
+      <span style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 50%, transparent);">Server</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 20px; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase;">
+      <a href="#connect" style="color: inherit; text-decoration: none;">Connect</a>
+      <a href="#tools" style="color: inherit; text-decoration: none;">Tools</a>
+      <a href="#lines" style="color: inherit; text-decoration: none;">Lines</a>
+      <a href="/copilot" class="btn btn-primary" style="text-transform: uppercase; letter-spacing: 0.06em;">Launch Copilot</a>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(260px, 1fr); border-bottom: 2px solid var(--color-divider);">
+    <div style="padding: 56px 32px 40px; border-right: 2px solid var(--color-divider);">
+      <div style="display: flex; align-items: center; gap: 10px; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--color-accent-700); margin-bottom: 28px;">
+        <span style="width: 8px; height: 8px; background: var(--color-accent); display: block;"></span>
+        <span>Model Context Protocol · Chicago</span>
+      </div>
+      <h1 style="font-size: clamp(40px, 6vw, 76px); line-height: 0.98; letter-spacing: -0.03em; margin: 0 0 20px; max-width: 15ch; text-wrap: balance;">Live Metra data, wired straight into your assistant.</h1>
+      <p style="font-size: 17px; line-height: 1.5; max-width: 54ch; margin: 0 0 28px; color: color-mix(in srgb, var(--color-text) 78%, transparent); text-wrap: pretty;">A remote MCP server over Metra's public GTFS feeds. Train positions, arrival predictions, service alerts and the full schedule for all eleven lines — exposed as ten tools any MCP client can call.</p>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+        <a href="/copilot" class="btn btn-primary" style="font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; padding: 12px 20px;">Launch Copilot →</a>
+        <a href="#connect" class="btn btn-secondary" style="font-size: 15px; letter-spacing: 0.06em; text-transform: uppercase; padding: 12px 20px;">Connection details</a>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column;">
+      <div style="padding: 18px 24px; border-bottom: 1px solid var(--color-divider); display: flex; align-items: center; gap: 10px;">
+        <span style="width: 9px; height: 9px; background: var(--color-accent); display: block;"></span>
+        <span style="font-family: var(--font-heading); font-weight: 800; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase;">{{ statusLabel }}</span>
+      </div>
+      <sc-for list="{{ facts }}" as="fact" hint-placeholder-count="4">
+        <div style="padding: 16px 24px; border-bottom: 1px solid var(--color-divider); display: flex; align-items: baseline; justify-content: space-between; gap: 16px;">
+          <span style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ fact.label }}</span>
+          <span style="font-family: var(--font-heading); font-weight: 800; font-size: 26px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">{{ fact.value }}</span>
+        </div>
+      </sc-for>
+      <div style="padding: 16px 24px; font-size: 12px; line-height: 1.5; color: color-mix(in srgb, var(--color-text) 55%, transparent);">Static schedule refreshes daily. Realtime feeds are queried per tool call.</div>
+    </div>
+  </div>
+
+  <div id="connect" style="border-bottom: 2px solid var(--color-divider);">
+    <div style="padding: 40px 32px 8px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;">
+      <h2 style="font-size: 32px; letter-spacing: -0.02em; margin: 0;">Connection</h2>
+      <span style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">Two transports · no auth</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 0; padding: 24px 32px 40px;">
+      <sc-for list="{{ endpoints }}" as="ep" hint-placeholder-count="2">
+        <div style="padding-right: 32px;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+            <span class="tag tag-outline" style="letter-spacing: 0.1em; text-transform: uppercase;">{{ ep.badge }}</span>
+            <span style="font-size: 13px; color: color-mix(in srgb, var(--color-text) 65%, transparent);">{{ ep.name }}</span>
+          </div>
+          <div style="display: flex; align-items: stretch; border: 1px solid var(--color-divider);">
+            <code style="flex: 1; min-width: 0; padding: 12px 14px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 13px; overflow-x: auto; white-space: nowrap; background: var(--color-surface);">{{ ep.url }}</code>
+            <button onClick="{{ ep.copy }}" class="btn btn-secondary" style="border: 0; border-left: 1px solid var(--color-divider); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; min-width: 84px;">{{ ep.copyLabel }}</button>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="border-top: 1px solid var(--color-divider); display: grid; grid-template-columns: minmax(200px, 0.6fr) minmax(0, 2fr);">
+      <div style="border-right: 1px solid var(--color-divider); padding: 24px 0;">
+        <div style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent); padding: 0 32px 12px;">Add it to</div>
+        <sc-for list="{{ clients }}" as="cl" hint-placeholder-count="3">
+          <button onClick="{{ cl.select }}" style="display: block; width: 100%; text-align: left; cursor: pointer; background: {{ cl.bg }}; color: {{ cl.fg }}; border: 0; border-left: 4px solid {{ cl.mark }}; padding: 12px 28px; font-family: var(--font-heading); font-weight: 800; font-size: 14px; letter-spacing: 0.04em;" style-hover="background: color-mix(in srgb, var(--color-text) 6%, transparent)">{{ cl.name }}</button>
+        </sc-for>
+      </div>
+      <div style="padding: 24px 32px; min-width: 0;">
+        <div style="font-size: 12px; line-height: 1.5; margin-bottom: 12px; color: color-mix(in srgb, var(--color-text) 70%, transparent); max-width: 62ch;">{{ activeClient.note }}</div>
+        <pre style="margin: 0; background: var(--color-neutral-900); color: var(--color-neutral-100); padding: 18px 20px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 13px; line-height: 1.6; overflow-x: auto;">{{ activeClient.code }}</pre>
+      </div>
+    </div>
+  </div>
+
+  <div id="tools" style="border-bottom: 2px solid var(--color-divider);">
+    <div style="padding: 40px 32px 24px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;">
+      <h2 style="font-size: 32px; letter-spacing: -0.02em; margin: 0;">Ten tools</h2>
+      <span style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">Schedule · Realtime · Ops</span>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); border-top: 1px solid var(--color-divider);">
+      <sc-for list="{{ tools }}" as="tool" hint-placeholder-count="10">
+        <div style="padding: 18px 24px; border-bottom: 1px solid var(--color-divider); border-right: 1px solid var(--color-divider); display: flex; gap: 14px; align-items: flex-start;">
+          <span style="font-family: var(--font-heading); font-weight: 800; font-size: 12px; letter-spacing: 0.06em; color: var(--color-accent); font-variant-numeric: tabular-nums; padding-top: 2px;">{{ tool.num }}</span>
+          <div style="min-width: 0;">
+            <div style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 14px; font-weight: 600; margin-bottom: 4px;">{{ tool.name }}</div>
+            <div style="font-size: 13px; line-height: 1.45; color: color-mix(in srgb, var(--color-text) 68%, transparent); text-wrap: pretty;">{{ tool.desc }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div id="lines" style="border-bottom: 2px solid var(--color-divider);">
+    <div style="padding: 40px 32px 20px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;">
+      <h2 style="font-size: 32px; letter-spacing: -0.02em; margin: 0;">Eleven lines</h2>
+      <span style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ boardStamp }}</span>
+    </div>
+    <div style="padding: 0 32px 40px; overflow-x: auto;">
+      <table class="table" style="min-width: 640px;">
+        <thead>
+          <tr>
+            <th style="width: 86px;">Code</th>
+            <th>Line</th>
+            <th>Terminal</th>
+            <th style="width: 120px;">Trains</th>
+            <th style="width: 160px;">Service</th>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{ lines }}" as="line" hint-placeholder-count="11">
+            <tr>
+              <td><span style="font-family: var(--font-heading); font-weight: 800; font-size: 13px; letter-spacing: 0.06em;">{{ line.code }}</span></td>
+              <td style="font-size: 14px;">{{ line.name }}</td>
+              <td style="font-size: 13px; color: color-mix(in srgb, var(--color-text) 65%, transparent);">{{ line.terminal }}</td>
+              <td style="font-variant-numeric: tabular-nums; font-size: 14px;">{{ line.active }}</td>
+              <td><span class="{{ line.tagClass }}" style="letter-spacing: 0.08em; text-transform: uppercase;">{{ line.status }}</span></td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      <div style="font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 45%, transparent); margin-top: 12px;">Illustrative board — the live values come from get_train_status.</div>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); border-bottom: 2px solid var(--color-divider);">
+    <div style="padding: 40px 32px; border-right: 1px solid var(--color-divider);">
+      <h3 style="font-size: 25px; margin: 0 0 8px;">Ask it in plain English</h3>
+      <p style="font-size: 14px; margin: 0 0 20px; color: color-mix(in srgb, var(--color-text) 68%, transparent); max-width: 46ch;">The Copilot is the same server behind a chat window. Nothing to install.</p>
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <sc-for list="{{ prompts }}" as="p" hint-placeholder-count="4">
+          <a href="/copilot" style="display: block; text-decoration: none; color: var(--color-text); border: 1px solid var(--color-divider); padding: 11px 14px; font-size: 14px;" style-hover="border-color: var(--color-accent); color: var(--color-accent-700)">{{ p }}</a>
+        </sc-for>
+      </div>
+    </div>
+    <div style="padding: 40px 32px;">
+      <h3 style="font-size: 25px; margin: 0 0 8px;">Data source</h3>
+      <p style="font-size: 14px; line-height: 1.55; margin: 0 0 16px; color: color-mix(in srgb, var(--color-text) 68%, transparent); max-width: 50ch;">Realtime GTFS feeds come straight from Metra's public API. Static schedule data is fetched from the published GTFS zip and cached; the realtime feeds are read on every tool call.</p>
+      <div style="display: flex; flex-direction: column; border-top: 1px solid var(--color-divider);">
+        <sc-for list="{{ sources }}" as="s" hint-placeholder-count="2">
+          <div style="display: flex; justify-content: space-between; gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--color-divider); font-size: 12px;">
+            <span style="letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ s.label }}</span>
+            <code style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; text-align: right;">{{ s.value }}</code>
+          </div>
+        </sc-for>
+      </div>
+      <a href="https://metra.com/metra-gtfs-api" class="btn btn-secondary" style="margin-top: 20px; text-transform: uppercase; letter-spacing: 0.06em;">Metra GTFS API docs</a>
+    </div>
+  </div>
+
+  <div style="background: var(--color-accent); color: var(--color-bg); padding: 56px 32px;">
+    <div style="font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.85; margin-bottom: 18px;">One endpoint. Ten tools. Eleven lines.</div>
+    <div style="font-family: var(--font-heading); font-weight: 800; font-size: clamp(24px, 4.6vw, 54px); line-height: 1.05; letter-spacing: -0.03em; word-break: break-all;">metra.remote-mcp.dev/mcp</div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 28px;">
+      <a href="/copilot" class="btn" style="background: var(--color-bg); color: var(--color-text); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 20px; font-size: 15px;">Launch Copilot</a>
+      <button onClick="{{ copyMcp }}" class="btn" style="border-color: color-mix(in srgb, #f3f2f2 60%, transparent); color: var(--color-bg); text-transform: uppercase; letter-spacing: 0.06em; padding: 12px 20px; font-size: 15px;">{{ mcpCopyLabel }}</button>
+    </div>
+  </div>
+
+  <div style="padding: 20px 32px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 12px; color: color-mix(in srgb, var(--color-text) 55%, transparent);">
+    <span>Metra MCP Server</span>
+    <span>·</span>
+    <a href="https://modelcontextprotocol.io">Model Context Protocol</a>
+    <span>·</span>
+    <a href="https://metra.com">Data from Metra</a>
+    <span style="margin-left: auto; letter-spacing: 0.1em; text-transform: uppercase;">Unofficial · not affiliated with Metra</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;statusLabel&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Operational&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;boardStamp&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Sample board · 5:41 PM CT&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;showTrainCounts&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+const TOOLS = [
+  ["get_routes", "List all eleven Metra lines with their identifiers."],
+  ["get_stops", "List stations, optionally filtered by route."],
+  ["search_stops", "Find stops by name, case-insensitive."],
+  ["get_schedule", "Scheduled trips for a route, stop or direction."],
+  ["get_next_trains", "Next departures from a stop, with countdown."],
+  ["refresh_schedule", "Force a re-download of the GTFS static data."],
+  ["get_train_positions", "Realtime GPS positions of active trains."],
+  ["get_trip_updates", "Realtime arrival and departure predictions."],
+  ["get_alerts", "Active service alerts — delays and cancellations."],
+  ["get_train_status", "Combined view: positions, delays and alerts."],
+];
+
+const LINES = [
+  ["BNSF", "Burlington Northern Santa Fe", "Aurora", 18, "On time"],
+  ["HC", "Heritage Corridor", "Joliet", 2, "On time"],
+  ["MD-N", "Milwaukee District North", "Fox Lake", 9, "On time"],
+  ["MD-W", "Milwaukee District West", "Elgin", 11, "Minor delays"],
+  ["ME", "Metra Electric", "University Park", 14, "On time"],
+  ["NCS", "North Central Service", "Antioch", 4, "On time"],
+  ["RI", "Rock Island", "Joliet", 12, "On time"],
+  ["SWS", "Southwest Service", "Manhattan", 3, "On time"],
+  ["UP-N", "Union Pacific North", "Kenosha", 13, "Minor delays"],
+  ["UP-NW", "Union Pacific Northwest", "Harvard / McHenry", 15, "On time"],
+  ["UP-W", "Union Pacific West", "Elburn", 12, "On time"],
+];
+
+const CLIENTS = [
+  {
+    id: "desktop",
+    name: "Claude Desktop",
+    note: "Add the server to your claude_desktop_config.json, then restart the app.",
+    code: '{\n  "mcpServers": {\n    "metra": {\n      "command": "npx",\n      "args": ["mcp-remote", "https://metra.remote-mcp.dev/mcp"]\n    }\n  }\n}',
+  },
+  {
+    id: "code",
+    name: "Claude Code",
+    note: "One command in your terminal — the transport is HTTP streamable.",
+    code: "claude mcp add --transport http metra \\\n  https://metra.remote-mcp.dev/mcp",
+  },
+  {
+    id: "web",
+    name: "Claude.ai",
+    note: "Open the integrations menu, add a custom remote MCP server, and paste the URL below.",
+    code: "https://metra.remote-mcp.dev/mcp",
+  },
+];
+
+class Component extends DCLogic {
+  state = { client: "desktop", copied: null };
+
+  copy(key, text) {
+    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+    this.setState({ copied: key });
+    clearTimeout(this._t);
+    this._t = setTimeout(() => this.setState({ copied: null }), 1600);
+  }
+
+  renderVals() {
+    const active = CLIENTS.find(c => c.id === this.state.client) || CLIENTS[0];
+    const mk = (badge, name, url, key) => ({
+      badge, name, url,
+      copyLabel: this.state.copied === key ? "Copied" : "Copy",
+      copy: () => this.copy(key, url),
+    });
+    return {
+      statusLabel: this.props.statusLabel ?? "Operational",
+      boardStamp: this.props.boardStamp ?? "Sample board · 5:41 PM CT",
+      facts: [
+        { label: "Lines covered", value: "11" },
+        { label: "MCP tools", value: "10" },
+        { label: "Transports", value: "2" },
+        { label: "Auth required", value: "None" },
+      ],
+      endpoints: [
+        mk("HTTP", "Streamable HTTP — recommended", "https://metra.remote-mcp.dev/mcp", "mcp"),
+        mk("SSE", "Server-Sent Events — legacy clients", "https://metra.remote-mcp.dev/sse", "sse"),
+      ],
+      clients: CLIENTS.map(c => {
+        const on = c.id === this.state.client;
+        return {
+          name: c.name,
+          select: () => this.setState({ client: c.id }),
+          bg: on ? "color-mix(in srgb, var(--color-accent) 10%, transparent)" : "transparent",
+          fg: on ? "var(--color-accent-700)" : "var(--color-text)",
+          mark: on ? "var(--color-accent)" : "transparent",
+        };
+      }),
+      activeClient: active,
+      tools: TOOLS.map(([name, desc], i) => ({
+        num: String(i + 1).padStart(2, "0"), name, desc,
+      })),
+      lines: LINES.map(([code, name, terminal, active2, status]) => ({
+        code, name, terminal,
+        active: this.props.showTrainCounts === false ? "—" : String(active2),
+        status,
+        tagClass: status === "On time" ? "tag tag-neutral" : "tag tag-accent",
+      })),
+      prompts: [
+        "What's the status of the BNSF line right now?",
+        "Are there any service alerts?",
+        "Next trains from Ogilvie heading to Kenosha",
+        "Show me the UP-N schedule for tomorrow morning",
+      ],
+      sources: [
+        { label: "Realtime", value: "gtfspublic.metrarr.com" },
+        { label: "Schedule", value: "schedules.metrarail.com" },
+      ],
+      mcpCopyLabel: this.state.copied === "poster" ? "Copied" : "Copy endpoint",
+      copyMcp: () => this.copy("poster", "https://metra.remote-mcp.dev/mcp"),
+    };
+  }
+}
+</script>
+</body>
+</html>

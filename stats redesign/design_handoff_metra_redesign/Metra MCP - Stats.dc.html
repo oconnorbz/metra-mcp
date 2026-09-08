@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/modernist-8880df0e-290f-411c-8e2e-70f18633acae/styles.css">
+<style>
+  body { margin: 0; }
+  a { color: var(--color-accent); }
+  a:hover { color: var(--color-accent-700); }
+  @keyframes metraBlink { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+</style>
+</helmet>
+
+<div style="background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); min-height: 100vh;">
+
+  <div style="display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding: 12px 32px; border-bottom: 2px solid var(--color-divider); background: var(--color-bg); position: sticky; top: 0; z-index: 10;">
+    <a href="/" style="display: flex; align-items: baseline; gap: 10px; margin-right: auto; text-decoration: none; color: inherit;">
+      <span style="font-family: var(--font-heading); font-weight: 800; font-size: 17px; letter-spacing: -0.01em;">METRA MCP STATS</span>
+      <span style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 50%, transparent);">Usage</span>
+    </a>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="display: block; width: 8px; height: 8px; background: var(--color-accent); animation: metraBlink 2s ease-in-out infinite;"></span>
+      <span style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-700);">{{ liveLabel }}</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 18px;">
+      <a href="/" style="color: inherit; text-decoration: none; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase;">Docs</a>
+      <a href="/copilot" style="color: inherit; text-decoration: none; font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase;">Copilot</a>
+      <button onClick="{{ refresh }}" class="btn btn-secondary" style="font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;">Refresh</button>
+    </div>
+  </div>
+
+  <sc-if value="{{ redacted }}" hint-placeholder-val="{{ true }}">
+    <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 11px 32px; border-bottom: 2px solid var(--color-divider); background: var(--color-accent-100);">
+      <span style="font-family: var(--font-heading); font-weight: 800; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-accent-800);">Detail redacted</span>
+      <span style="font-size: 13px; color: var(--color-accent-900);">Client IPs and user-agents are hidden. Open <code style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;">/stats?token=…</code> with a valid stats token to see them.</span>
+    </div>
+  </sc-if>
+
+  <div style="display: flex; flex-wrap: wrap; border-bottom: 2px solid var(--color-divider);">
+    <sc-for list="{{ headline }}" as="s" hint-placeholder-count="5">
+      <div style="flex: 1 1 200px; padding: 22px 24px 20px; border-right: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider); min-width: 0;">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+          <span style="display: block; width: 7px; height: 7px; background: {{ s.mark }}; flex: none;"></span>
+          <span style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ s.label }}</span>
+        </div>
+        <div style="font-family: var(--font-heading); font-weight: 800; font-size: clamp(30px, 3.4vw, 44px); line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: {{ s.color }};">{{ s.value }}</div>
+        <div style="font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 8px; color: color-mix(in srgb, var(--color-text) 45%, transparent);">{{ s.sub }}</div>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; flex-wrap: wrap; border-bottom: 2px solid var(--color-divider);">
+    <sc-for list="{{ boards }}" as="b" hint-placeholder-count="4">
+      <div style="flex: 1 1 340px; border-right: 1px solid var(--color-divider); border-bottom: 1px solid var(--color-divider); min-width: 0;">
+        <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 16px 24px 12px;">
+          <span style="font-family: var(--font-heading); font-weight: 800; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;">{{ b.title }}</span>
+          <span style="margin-left: auto; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 45%, transparent);">{{ b.note }}</span>
+        </div>
+        <sc-if value="{{ b.hidden }}" hint-placeholder-val="{{ false }}">
+          <div style="padding: 14px 24px 20px; font-size: 13px; color: color-mix(in srgb, var(--color-text) 45%, transparent);">{{ b.hiddenNote }}</div>
+        </sc-if>
+        <sc-if value="{{ b.shown }}" hint-placeholder-val="{{ true }}">
+          <div style="border-top: 1px solid var(--color-divider);">
+            <sc-for list="{{ b.rows }}" as="r" hint-placeholder-count="6">
+              <div style="padding: 9px 24px; border-bottom: 1px solid var(--color-divider);">
+                <div style="display: flex; align-items: baseline; gap: 16px;">
+                  <span style="font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: {{ r.font }};">{{ r.name }}</span>
+                  <span style="font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 45%, transparent);">{{ r.tag }}</span>
+                  <span style="margin-left: auto; font-family: var(--font-heading); font-weight: 800; font-size: 14px; font-variant-numeric: tabular-nums;">{{ r.count }}</span>
+                </div>
+                <sc-if value="{{ showBars }}" hint-placeholder-val="{{ true }}">
+                  <div style="height: 3px; margin-top: 7px; background: color-mix(in srgb, var(--color-text) 10%, transparent);">
+                    <div style="height: 3px; width: {{ r.pct }}; background: var(--color-accent);"></div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="border-bottom: 2px solid var(--color-divider);">
+    <div style="display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding: 36px 32px 16px;">
+      <h2 style="font-size: 32px; letter-spacing: -0.02em; margin: 0;">Recent tool calls</h2>
+      <span style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ mcpCountNote }}</span>
+    </div>
+    <div style="display: flex; gap: 10px; align-items: stretch; padding: 0 32px 16px; max-width: 560px;">
+      <input class="input" value="{{ mcpQuery }}" onChange="{{ onMcpQuery }}" placeholder="Filter by tool, IP, arguments" style="flex: 1; min-height: 38px; background: var(--color-bg);">
+      <button onClick="{{ clearMcp }}" class="btn btn-secondary" style="font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;">Clear</button>
+    </div>
+    <div style="overflow-x: auto; border-top: 1px solid var(--color-divider);">
+      <table class="table" style="min-width: 1040px;">
+        <thead>
+          <tr>
+            <th style="width: 150px; padding-left: 32px;">Time (UTC)</th>
+            <th style="width: 128px;">IP</th>
+            <th style="width: 172px;">Tool</th>
+            <th>Arguments</th>
+            <th style="width: 130px;">Status</th>
+            <th style="width: 92px; text-align: right;">Duration</th>
+            <th style="width: 190px; padding-right: 32px;">User-agent</th>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{ mcpRows }}" as="r" hint-placeholder-count="8">
+            <tr>
+              <td style="padding-left: 32px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 12px; white-space: nowrap; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ r.ts }}</td>
+              <td style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 12px; color: {{ r.ipColor }};">{{ r.ip }}</td>
+              <td style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 13px; font-weight: 600;">{{ r.tool }}</td>
+              <td style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 12px; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--color-text) 72%, transparent);">{{ r.args }}</td>
+              <td>
+                <div style="display: flex; align-items: baseline; gap: 8px;">
+                  <span class="{{ r.tagClass }}" style="letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;">{{ r.status }}</span>
+                  <span style="font-size: 11px; color: var(--color-accent-700); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ r.error }}</span>
+                </div>
+              </td>
+              <td style="text-align: right; font-variant-numeric: tabular-nums; font-size: 13px;">{{ r.duration }}</td>
+              <td style="padding-right: 32px; font-size: 12px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--color-text) 50%, transparent);">{{ r.ua }}</td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      <sc-if value="{{ mcpEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="padding: 20px 32px; font-size: 13px; color: color-mix(in srgb, var(--color-text) 45%, transparent);">No tool calls match that filter.</div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="border-bottom: 2px solid var(--color-divider);">
+    <div style="display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; padding: 36px 32px 16px;">
+      <h2 style="font-size: 32px; letter-spacing: -0.02em; margin: 0;">Recent dashboard events</h2>
+      <span style="font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ dashCountNote }}</span>
+    </div>
+    <div style="display: flex; gap: 10px; align-items: stretch; padding: 0 32px 16px; max-width: 560px;">
+      <input class="input" value="{{ dashQuery }}" onChange="{{ onDashQuery }}" placeholder="Filter by path, IP, event, details" style="flex: 1; min-height: 38px; background: var(--color-bg);">
+      <button onClick="{{ clearDash }}" class="btn btn-secondary" style="font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;">Clear</button>
+    </div>
+    <div style="overflow-x: auto; border-top: 1px solid var(--color-divider);">
+      <table class="table" style="min-width: 900px;">
+        <thead>
+          <tr>
+            <th style="width: 150px; padding-left: 32px;">Time (UTC)</th>
+            <th style="width: 128px;">IP</th>
+            <th style="width: 150px;">Path</th>
+            <th style="width: 140px;">Event</th>
+            <th>Details</th>
+            <th style="width: 190px; padding-right: 32px;">User-agent</th>
+          </tr>
+        </thead>
+        <tbody>
+          <sc-for list="{{ dashRows }}" as="r" hint-placeholder-count="8">
+            <tr>
+              <td style="padding-left: 32px; font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 12px; white-space: nowrap; color: color-mix(in srgb, var(--color-text) 55%, transparent);">{{ r.ts }}</td>
+              <td style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 12px; color: {{ r.ipColor }};">{{ r.ip }}</td>
+              <td style="font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace; font-size: 13px;">{{ r.path }}</td>
+              <td><span class="{{ r.tagClass }}" style="letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600;">{{ r.event }}</span></td>
+              <td style="font-size: 13px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--color-text) 72%, transparent);">{{ r.details }}</td>
+              <td style="padding-right: 32px; font-size: 12px; max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--color-text) 50%, transparent);">{{ r.ua }}</td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+      <sc-if value="{{ dashEmpty }}" hint-placeholder-val="{{ false }}">
+        <div style="padding: 20px 32px; font-size: 13px; color: color-mix(in srgb, var(--color-text) 45%, transparent);">No events match that filter.</div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 16px; flex-wrap: wrap; align-items: center; padding: 20px 32px; font-size: 12px; color: color-mix(in srgb, var(--color-text) 55%, transparent);">
+    <span>Metra MCP Server</span>
+    <span>·</span>
+    <a href="/">Docs</a>
+    <span>·</span>
+    <a href="/copilot">Copilot</a>
+    <span style="margin-left: auto; letter-spacing: 0.1em; text-transform: uppercase;">Events retained in SQLite · times in UTC</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;redactIps&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Stats page&quot;},&quot;showBars&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Stats page&quot;}}">
+const TOP_TOOLS = [
+  ["get_train_status", 5120], ["get_next_trains", 3980], ["get_alerts", 2870],
+  ["get_trip_updates", 2210], ["get_stops", 1640], ["get_routes", 1180],
+  ["get_schedule", 830], ["search_stops", 402],
+];
+
+const TOP_MCP_IPS = [
+  ["34.118.212.9", 6840], ["18.204.77.113", 3120], ["2600:1f18:63c::4", 2480],
+  ["104.28.196.41", 1610], ["73.44.19.203", 902], ["45.79.112.6", 388],
+];
+
+const TOP_PATHS = [
+  ["/copilot", "chat_query", 2140], ["/", "page_view", 1480],
+  ["/copilot", "page_view", 690], ["/stats", "page_view", 402],
+  ["/api/board", "page_view", 190],
+];
+
+const TOP_DASH_IPS = [
+  ["73.44.19.203", 412], ["98.212.4.77", 288], ["2601:246:c00::19", 201],
+  ["24.13.88.150", 164], ["162.158.90.4", 96],
+];
+
+const MCP_CALLS = [
+  ["2026-09-08 20:54:12", "34.118.212.9", "get_train_status", '{"route_id": "UP-N"}', 1, "", 412, "claude-desktop/0.9.4 (mcp-remote)"],
+  ["2026-09-08 20:53:58", "18.204.77.113", "get_next_trains", '{"stop_id": "OTC", "limit": 6}', 1, "", 288, "claude-code/1.2.0"],
+  ["2026-09-08 20:53:31", "34.118.212.9", "get_alerts", "{}", 1, "", 154, "claude-desktop/0.9.4 (mcp-remote)"],
+  ["2026-09-08 20:52:47", "104.28.196.41", "get_trip_updates", '{"route_id": "BNSF"}', 0, "upstream feed timeout after 8s", 8012, "python-httpx/0.27.0"],
+  ["2026-09-08 20:52:03", "2600:1f18:63c::4", "get_schedule", '{"route_id": "MD-W", "direction": 1}', 1, "", 631, "claude.ai/integrations"],
+  ["2026-09-08 20:51:44", "73.44.19.203", "search_stops", '{"query": "ogilvie"}', 1, "", 47, "claude-desktop/0.9.4 (mcp-remote)"],
+  ["2026-09-08 20:51:12", "18.204.77.113", "get_stops", '{"route_id": "ME"}', 1, "", 92, "claude-code/1.2.0"],
+  ["2026-09-08 20:50:36", "45.79.112.6", "get_train_positions", "{}", 0, "invalid route_id: 'UPN'", 61, "curl/8.7.1"],
+  ["2026-09-08 20:50:02", "34.118.212.9", "get_routes", "{}", 1, "", 18, "claude-desktop/0.9.4 (mcp-remote)"],
+  ["2026-09-08 20:49:19", "2600:1f18:63c::4", "get_train_status", '{"route_id": "RI"}', 1, "", 397, "claude.ai/integrations"],
+];
+
+const DASH_EVENTS = [
+  ["2026-09-08 20:55:01", "73.44.19.203", "/copilot", "chat_query", "Next trains from Ogilvie to Kenosha", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"],
+  ["2026-09-08 20:54:40", "98.212.4.77", "/", "page_view", "referrer: news.ycombinator.com", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2)"],
+  ["2026-09-08 20:54:11", "73.44.19.203", "/copilot", "chat_query", "Any service alerts right now?", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"],
+  ["2026-09-08 20:53:22", "2601:246:c00::19", "/copilot", "page_view", "referrer: /", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"],
+  ["2026-09-08 20:52:58", "24.13.88.150", "/", "page_view", "referrer: direct", "Mozilla/5.0 (X11; Linux x86_64)"],
+  ["2026-09-08 20:52:30", "162.158.90.4", "/stats", "page_view", "token: valid", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"],
+  ["2026-09-08 20:51:49", "98.212.4.77", "/copilot", "chat_query", "BNSF line status and next departures", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2)"],
+  ["2026-09-08 20:51:07", "24.13.88.150", "/", "page_view", "referrer: google.com", "Mozilla/5.0 (X11; Linux x86_64)"],
+];
+
+const num = (n) => n.toLocaleString("en-US");
+const MONO = "ui-monospace, 'SFMono-Regular', Menlo, monospace";
+
+class Component extends DCLogic {
+  state = { mcpQuery: "", dashQuery: "", tick: 14 };
+
+  componentDidMount() {
+    this._i = setInterval(() => this.setState(s => ({ tick: (s.tick + 1) % 30 })), 1000);
+  }
+  componentWillUnmount() { clearInterval(this._i); }
+
+  renderVals() {
+    const redacted = this.props.redactIps ?? false;
+    const showBars = this.props.showBars ?? true;
+    const hide = (v) => (redacted ? "hidden" : v);
+    const ipColor = redacted
+      ? "color-mix(in srgb, var(--color-text) 35%, transparent)"
+      : "var(--color-text)";
+
+    const mq = this.state.mcpQuery.toLowerCase();
+    const dq = this.state.dashQuery.toLowerCase();
+    const mcpRows = MCP_CALLS
+      .filter(r => !mq || [r[1], r[2], r[3], r[5], r[7]].some(v => String(v).toLowerCase().includes(mq)))
+      .map(([ts, ip, tool, args, ok, err, ms, ua]) => ({
+        ts, ip: hide(ip), tool, args,
+        status: ok ? "OK" : "ERR",
+        error: ok ? "" : err,
+        tagClass: ok ? "tag tag-neutral" : "tag tag-accent",
+        duration: ms + "ms",
+        ua: hide(ua),
+        ipColor,
+      }));
+    const dashRows = DASH_EVENTS
+      .filter(r => !dq || [r[1], r[2], r[3], r[4], r[5]].some(v => String(v).toLowerCase().includes(dq)))
+      .map(([ts, ip, path, event, details, ua]) => ({
+        ts, ip: hide(ip), path, event, details,
+        tagClass: event === "chat_query" ? "tag tag-outline" : "tag tag-neutral",
+        ua: hide(ua),
+        ipColor,
+      }));
+
+    const board = (title, note, rows, max, mono, hidden) => ({
+      title, note,
+      hidden: !!hidden,
+      shown: !hidden,
+      hiddenNote: "Requires the stats token — open /stats?token=… to reveal.",
+      rows: rows.map(r => ({
+        name: r[0],
+        tag: r.length > 2 && typeof r[1] === "string" ? r[1] : "",
+        count: num(r[r.length - 1]),
+        pct: Math.round((r[r.length - 1] / max) * 100) + "%",
+        font: mono ? MONO : "var(--font-body)",
+      })),
+    });
+
+    return {
+      liveLabel: `Auto-refresh · ${30 - this.state.tick}s`,
+      refresh: () => this.setState({ tick: 0 }),
+      redacted,
+      showBars,
+      headline: [
+        { label: "MCP tool calls", value: num(18412), sub: "All time", mark: "var(--color-accent)", color: "var(--color-text)" },
+        { label: "Errors", value: num(214), sub: "1.2% error rate", mark: "var(--color-accent)", color: "var(--color-accent-700)" },
+        { label: "MCP clients", value: "63", sub: "Unique IPs", mark: "var(--color-neutral-400)", color: "var(--color-text)" },
+        { label: "Dashboard events", value: num(4902), sub: `${num(1188)} unique visitors`, mark: "var(--color-neutral-400)", color: "var(--color-text)" },
+      ],
+      boards: [
+        board("Top tools", "Calls", TOP_TOOLS, TOP_TOOLS[0][1], true, false),
+        board("Top MCP clients", "Calls", TOP_MCP_IPS, TOP_MCP_IPS[0][1], true, redacted),
+        board("Top paths", "Hits", TOP_PATHS, TOP_PATHS[0][2], true, false),
+        board("Top dashboard clients", "Hits", TOP_DASH_IPS, TOP_DASH_IPS[0][1], true, redacted),
+      ],
+      mcpQuery: this.state.mcpQuery,
+      dashQuery: this.state.dashQuery,
+      onMcpQuery: e => this.setState({ mcpQuery: e.target.value }),
+      onDashQuery: e => this.setState({ dashQuery: e.target.value }),
+      clearMcp: () => this.setState({ mcpQuery: "" }),
+      clearDash: () => this.setState({ dashQuery: "" }),
+      mcpRows, dashRows,
+      mcpEmpty: mcpRows.length === 0,
+      dashEmpty: dashRows.length === 0,
+      mcpCountNote: `Last ${mcpRows.length} of 300`,
+      dashCountNote: `Last ${dashRows.length} of 300`,
+    };
+  }
+}
+</script>
+</body>
+</html>
