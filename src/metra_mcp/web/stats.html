@@ -5,267 +5,160 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Metra MCP — Stats</title>
   <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
+  <link rel="stylesheet" href="/modernist.css">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Inter:wght@400;500;600;700&display=swap');
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'Inter', -apple-system, sans-serif;
-      background: #09090b;
-      color: #e4e4e7;
-      line-height: 1.5;
-    }
-    .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
-    header {
-      display: flex; align-items: center; gap: 16px;
-      padding-bottom: 24px; border-bottom: 1px solid #27272a; margin-bottom: 24px;
-    }
-    .logo {
-      width: 48px; height: 48px; background: #f59e0b; border-radius: 10px;
-      display: flex; align-items: center; justify-content: center; color: #000;
-    }
-    h1 {
-      color: #f59e0b; font-weight: 800; font-size: 20px;
-      letter-spacing: 0.05em; font-family: 'JetBrains Mono', monospace;
-    }
-    .tagline { color: #71717a; font-size: 12px; letter-spacing: 0.04em; }
-    .nav { margin-left: auto; display: flex; gap: 12px; }
-    .nav a {
-      color: #a1a1aa; text-decoration: none; font-size: 13px;
-      font-family: 'JetBrains Mono', monospace; padding: 6px 12px;
-      border-radius: 6px; border: 1px solid #27272a;
-    }
-    .nav a:hover { color: #f59e0b; border-color: #f59e0b; }
-    h2 {
-      color: #fafafa; font-size: 16px; font-weight: 700;
-      margin-top: 32px; margin-bottom: 12px; padding-bottom: 6px;
-      border-bottom: 1px solid #1c1c1e;
-      font-family: 'JetBrains Mono', monospace; letter-spacing: 0.04em;
-    }
-    h3 {
-      color: #e4e4e7; font-size: 13px; font-weight: 600;
-      margin-top: 16px; margin-bottom: 8px;
-      font-family: 'JetBrains Mono', monospace; letter-spacing: 0.04em;
-    }
-    .section { margin-bottom: 32px; }
-    .summary-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
-    }
-    .stat-card {
-      background: #111113; border: 1px solid #27272a;
-      border-radius: 10px; padding: 16px 18px;
-    }
-    .stat-label {
-      color: #71717a; font-size: 11px; letter-spacing: 0.06em;
-      text-transform: uppercase; font-family: 'JetBrains Mono', monospace;
-      margin-bottom: 6px;
-    }
-    .stat-value {
-      color: #f59e0b; font-size: 26px; font-weight: 800;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .stat-sub { color: #71717a; font-size: 11px; margin-top: 4px; font-family: 'JetBrains Mono', monospace; }
-    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-    @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
-    table {
-      width: 100%; border-collapse: collapse; background: #111113;
-      border: 1px solid #27272a; border-radius: 10px; overflow: hidden;
-      font-size: 12px;
-    }
-    th, td {
-      padding: 8px 12px; text-align: left;
-      border-bottom: 1px solid #1c1c1e;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    th {
-      background: #18181b; color: #a1a1aa; font-weight: 600;
-      font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase;
-    }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: #18181b; }
-    td.num { text-align: right; color: #f59e0b; font-weight: 700; }
-    td.tool { color: #f59e0b; font-weight: 700; }
-    td.ip { color: #93c5fd; }
-    td.error { color: #fca5a5; font-size: 11px; }
-    td.success { color: #4ade80; }
-    td.fail { color: #fca5a5; }
-    td.ts { color: #71717a; white-space: nowrap; }
-    td.args {
-      color: #d4d4d8; max-width: 320px; overflow: hidden;
-      text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
-    }
-    td.args.expanded { white-space: normal; word-break: break-all; }
-    td.ua {
-      color: #71717a; max-width: 180px;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    }
-    .controls {
-      display: flex; gap: 8px; margin-bottom: 12px; align-items: center;
-    }
-    .controls input {
-      background: #18181b; border: 1px solid #27272a; color: #e4e4e7;
-      padding: 6px 10px; border-radius: 6px;
-      font-family: 'JetBrains Mono', monospace; font-size: 12px;
-      flex: 1; max-width: 300px;
-    }
-    .controls button {
-      background: #f59e0b; color: #000; border: none;
-      padding: 6px 14px; border-radius: 6px; cursor: pointer;
-      font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700;
-    }
-    .controls button:hover { background: #d97706; }
-    .badge {
-      display: inline-block; padding: 2px 8px; border-radius: 4px;
-      font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .badge-ok { background: #052e16; color: #4ade80; border: 1px solid #166534; }
-    .badge-err { background: #450a0a; color: #fca5a5; border: 1px solid #991b1b; }
-    .badge-pv { background: #1e3a8a; color: #93c5fd; border: 1px solid #1d4ed8; }
-    .badge-chat { background: #581c87; color: #d8b4fe; border: 1px solid #7c3aed; }
-    .scroll-x { overflow-x: auto; }
-    .muted { color: #52525b; font-style: italic; padding: 16px; text-align: center; }
-    .status-dot {
-      display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-      background: #4ade80; margin-right: 6px; box-shadow: 0 0 6px #4ade8080;
-    }
+    a:hover { color: var(--color-accent-700); }
+    /* Section heads share the page's 32px gutter; the media query in
+       modernist.css narrows them along with everything else. */
+    .m-stats-sec-head { padding: 36px 32px 16px; }
   </style>
 </head>
-<body>
-  <div class="container">
-    <header>
-      <div class="logo"><svg width="30" height="30" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><line x1="11" y1="2" x2="11" y2="30" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-opacity="0.5"/><line x1="21" y1="2" x2="21" y2="30" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-opacity="0.5"/><line x1="9" y1="4" x2="23" y2="4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.3"/><line x1="9" y1="9" x2="23" y2="9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.3"/><line x1="9" y1="14" x2="23" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.3"/><line x1="9" y1="19" x2="23" y2="19" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.3"/><line x1="9" y1="24" x2="23" y2="24" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.3"/><line x1="9" y1="29" x2="23" y2="29" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-opacity="0.3"/><path d="M13 8 H19 L20 11 V22 H12 V11 Z" fill="currentColor" fill-opacity="0.18" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><rect x="14" y="13" width="4" height="6" rx="0.5" fill="currentColor" fill-opacity="0.55" stroke="currentColor" stroke-width="1.6"/><path d="M14 8 L16 6 L18 8 Z" fill="currentColor"/></svg></div>
-      <div>
-        <h1>METRA MCP STATS</h1>
-        <div class="tagline"><span class="status-dot"></span>Live usage — auto-refreshes every 30s</div>
-      </div>
-      <nav class="nav">
-        <a href="/">Docs</a>
-        <a href="/copilot">Copilot</a>
-      </nav>
-    </header>
+<body class="m-page">
 
-    <section class="section">
-      <h2>Summary</h2>
-      <div class="two-col">
-        <div>
-          <h3>MCP Server</h3>
-          <div class="summary-grid">
-            <div class="stat-card">
-              <div class="stat-label">Total Calls</div>
-              <div class="stat-value" id="mcp-total">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Errors</div>
-              <div class="stat-value" id="mcp-errors">—</div>
-              <div class="stat-sub" id="mcp-errpct"></div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Unique IPs</div>
-              <div class="stat-value" id="mcp-ips">—</div>
-            </div>
-          </div>
-        </div>
-        <div>
-          <h3>Dashboard</h3>
-          <div class="summary-grid">
-            <div class="stat-card">
-              <div class="stat-label">Total Events</div>
-              <div class="stat-value" id="dash-total">—</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Unique IPs</div>
-              <div class="stat-value" id="dash-ips">—</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="m-head" style="position: sticky; top: 0; z-index: 10; padding: 14px 32px;">
+    <a href="/" class="m-brand">
+      <span class="m-brand-name" style="font-size: 18px;">METRA MCP STATS</span>
+      <span class="m-brand-sub">Usage</span>
+    </a>
+    <div style="display: flex; align-items: center; gap: 20px;">
+      <span style="display: flex; align-items: center; gap: 8px;">
+        <span class="m-sq m-sq-live"></span>
+        <!-- Countdown rewritten each second by stats.js. -->
+        <span id="live-label" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--color-accent-700);">Auto-refresh &middot; 30s</span>
+      </span>
+      <a href="/" class="m-nav-link">Docs</a>
+      <a href="/copilot" class="m-nav-link">Copilot</a>
+      <button id="refresh-btn" class="btn btn-secondary" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;">Refresh</button>
+    </div>
+  </div>
 
-    <section class="section">
-      <div class="two-col">
-        <div>
-          <h3>Top MCP Tools</h3>
-          <div class="scroll-x">
-            <table>
-              <thead><tr><th>Tool</th><th style="text-align:right">Calls</th></tr></thead>
-              <tbody id="top-tools"></tbody>
-            </table>
-          </div>
-        </div>
-        <div>
-          <h3>Top MCP Clients (IP)</h3>
-          <div class="scroll-x">
-            <table>
-              <thead><tr><th>IP</th><th style="text-align:right">Calls</th></tr></thead>
-              <tbody id="top-mcp-ips"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </section>
+  <!-- ── Redaction notice ───────────────────────────────────────────────
+       Hidden unless /api/stats omits the IP fields. -->
+  <div id="redaction-notice" class="m-notice" hidden>
+    <span class="m-notice-label">Detail redacted</span>
+    <span>Client IPs and user-agents are hidden. Open <span class="mono">/stats?token=&hellip;</span> with a valid stats token to see them.</span>
+  </div>
 
-    <section class="section">
-      <div class="two-col">
-        <div>
-          <h3>Top Dashboard Paths</h3>
-          <div class="scroll-x">
-            <table>
-              <thead><tr><th>Path</th><th>Event</th><th style="text-align:right">Hits</th></tr></thead>
-              <tbody id="top-dash-paths"></tbody>
-            </table>
-          </div>
-        </div>
-        <div>
-          <h3>Top Dashboard Clients (IP)</h3>
-          <div class="scroll-x">
-            <table>
-              <thead><tr><th>IP</th><th style="text-align:right">Hits</th></tr></thead>
-              <tbody id="top-dash-ips"></tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </section>
+  <!-- ── Headline band ──────────────────────────────────────────────────── -->
+  <div class="m-band">
+    <div class="m-kpi">
+      <span class="m-label"><span class="m-sq" style="width: 7px; height: 7px; display: inline-block; vertical-align: middle; margin-right: 7px;"></span>MCP tool calls</span>
+      <div class="m-kpi-val" id="mcp-total">&mdash;</div>
+      <div class="m-kpi-sub">All time</div>
+    </div>
+    <div class="m-kpi">
+      <span class="m-label"><span class="m-sq" style="width: 7px; height: 7px; display: inline-block; vertical-align: middle; margin-right: 7px;"></span>Errors</span>
+      <div class="m-kpi-val" id="mcp-errors" style="color: var(--color-accent-700);">&mdash;</div>
+      <div class="m-kpi-sub" id="mcp-errpct"></div>
+    </div>
+    <div class="m-kpi">
+      <span class="m-label"><span class="m-sq" style="width: 7px; height: 7px; display: inline-block; vertical-align: middle; margin-right: 7px; background: var(--color-neutral-400);"></span>MCP clients</span>
+      <div class="m-kpi-val" id="mcp-ips">&mdash;</div>
+      <div class="m-kpi-sub">Unique IPs</div>
+    </div>
+    <div class="m-kpi">
+      <span class="m-label"><span class="m-sq" style="width: 7px; height: 7px; display: inline-block; vertical-align: middle; margin-right: 7px; background: var(--color-neutral-400);"></span>Dashboard events</span>
+      <div class="m-kpi-val" id="dash-total">&mdash;</div>
+      <div class="m-kpi-sub"><span id="dash-ips">&mdash;</span> unique visitors</div>
+    </div>
+  </div>
 
-    <section class="section">
-      <h2>Recent MCP Tool Calls</h2>
-      <div class="controls">
-        <input id="mcp-filter" placeholder="filter by tool, IP, args..." />
-        <button id="refresh-btn">Refresh</button>
+  <!-- ── Top lists ──────────────────────────────────────────────────────── -->
+  <div class="m-band">
+    <div class="m-panel">
+      <div class="m-panel-head">
+        <span class="m-panel-title">Top tools</span>
+        <span class="m-panel-note">Calls</span>
       </div>
-      <div class="scroll-x">
-        <table>
-          <thead>
-            <tr>
-              <th>Time (UTC)</th><th>IP</th><th>Tool</th><th>Arguments</th>
-              <th>Status</th><th>Duration</th><th>User-Agent</th>
-            </tr>
-          </thead>
-          <tbody id="mcp-rows"></tbody>
-        </table>
+      <div id="top-tools"></div>
+    </div>
+    <div class="m-panel">
+      <div class="m-panel-head">
+        <span class="m-panel-title">Top MCP clients</span>
+        <span class="m-panel-note">Calls</span>
       </div>
-    </section>
+      <div id="top-mcp-ips"></div>
+    </div>
+    <div class="m-panel">
+      <div class="m-panel-head">
+        <span class="m-panel-title">Top paths</span>
+        <span class="m-panel-note">Hits</span>
+      </div>
+      <div id="top-dash-paths"></div>
+    </div>
+    <div class="m-panel">
+      <div class="m-panel-head">
+        <span class="m-panel-title">Top dashboard clients</span>
+        <span class="m-panel-note">Hits</span>
+      </div>
+      <div id="top-dash-ips"></div>
+    </div>
+  </div>
 
-    <section class="section">
-      <h2>Recent Dashboard Events</h2>
-      <div class="controls">
-        <input id="dash-filter" placeholder="filter by path, IP, event, details..." />
-      </div>
-      <div class="scroll-x">
-        <table>
-          <thead>
-            <tr>
-              <th>Time (UTC)</th><th>IP</th><th>Path</th><th>Event</th>
-              <th>Details</th><th>User-Agent</th>
-            </tr>
-          </thead>
-          <tbody id="dash-rows"></tbody>
-        </table>
-      </div>
-    </section>
+  <!-- ── Recent tool calls ──────────────────────────────────────────────── -->
+  <div class="m-sec-head m-stats-sec-head">
+    <h2>Recent tool calls</h2>
+    <span class="m-sec-note" id="mcp-count-note"></span>
+  </div>
+  <div class="m-filter-row">
+    <input id="mcp-filter" class="input" placeholder="Filter by tool, IP, arguments">
+    <button id="mcp-clear" class="btn btn-secondary" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap;">Clear</button>
+  </div>
+  <div class="m-tablewrap">
+    <table class="table" style="min-width: 1120px;">
+      <thead>
+        <tr>
+          <th style="width: 182px;">Time (UTC)</th>
+          <th style="width: 128px;">IP</th>
+          <th style="width: 172px;">Tool</th>
+          <th>Arguments</th>
+          <th style="width: 130px;">Status</th>
+          <th style="width: 92px; text-align: right;">Duration</th>
+          <th style="width: 214px;">User-agent</th>
+        </tr>
+      </thead>
+      <tbody id="mcp-rows"></tbody>
+    </table>
+  </div>
+  <div class="m-empty-note" id="mcp-empty" hidden></div>
+
+  <!-- ── Recent dashboard events ────────────────────────────────────────── -->
+  <div class="m-sec-head m-stats-sec-head" style="border-top: 2px solid var(--color-divider);">
+    <h2>Recent dashboard events</h2>
+    <span class="m-sec-note" id="dash-count-note"></span>
+  </div>
+  <div class="m-filter-row">
+    <input id="dash-filter" class="input" placeholder="Filter by path, IP, event, details">
+    <button id="dash-clear" class="btn btn-secondary" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; white-space: nowrap;">Clear</button>
+  </div>
+  <div class="m-tablewrap">
+    <table class="table" style="min-width: 1000px;">
+      <thead>
+        <tr>
+          <th style="width: 182px;">Time (UTC)</th>
+          <th style="width: 128px;">IP</th>
+          <th style="width: 150px;">Path</th>
+          <th style="width: 140px;">Event</th>
+          <th>Details</th>
+          <th style="width: 214px;">User-agent</th>
+        </tr>
+      </thead>
+      <tbody id="dash-rows"></tbody>
+    </table>
+  </div>
+  <div class="m-empty-note" id="dash-empty" hidden></div>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <div class="m-foot" style="border-top: 2px solid var(--color-divider);">
+    <span>Metra MCP Server</span>
+    <span>&middot;</span>
+    <a href="/">Docs</a>
+    <span>&middot;</span>
+    <a href="/copilot">Copilot</a>
+    <span style="margin-left: auto; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;">Events retained in SQLite &middot; times in UTC</span>
   </div>
 
   <script src="/stats.js"></script>

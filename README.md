@@ -149,7 +149,10 @@ the stylesheet and the prompt in the same commit or model output will render
 unstyled.
 
 `/` is hand-written HTML (`web/docs.html`) plus `web/docs.js` for the clipboard
-buttons, the client-snippet picker and the live line board. `/copilot` is a
+buttons, the client-snippet picker and the live line board. `/stats` is the
+same arrangement (`web/stats.html` + `web/stats.js`): a KPI band, four ranked
+top-lists with proportional bars, and the two event tables, all fed by
+`/api/stats/*` and re-fetched on a 30s countdown. `/copilot` is a
 small React app: the JSX source is `web/app.jsx` and the served file is the
 prebuilt `app.js` next to it (no in-browser Babel). After editing `app.jsx`,
 rebuild with:

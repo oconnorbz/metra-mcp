@@ -1,9 +1,12 @@
 const $ = (id) => document.getElementById(id);
 
 // Visit /stats?token=... to see client IPs / user-agents; without a valid
-// METRA_STATS_TOKEN the API redacts them and the columns show "—".
+// METRA_STATS_TOKEN the API redacts them and the columns show "hidden".
 const STATS_TOKEN = new URLSearchParams(location.search).get("token");
 const api = (path) => fetch(path, STATS_TOKEN ? { headers: { "X-Stats-Token": STATS_TOKEN } } : undefined);
+
+const ROW_LIMIT = 300;
+const REFRESH_SEC = 30;
 
 function esc(s) {
   if (s == null) return "";
@@ -15,16 +18,44 @@ function fmtTs(ts) {
   return ts.replace("T", " ").replace("+00:00", "").replace("Z", "");
 }
 
+// ── Top-list panels ────────────────────────────────────────────────────────
+// Each row carries a 3px bar proportional to the panel's own top row, so the
+// four panels are read individually rather than against each other.
+function renderPanel(el, rows, opts) {
+  if (!rows.length) {
+    el.innerHTML = `<div class="m-empty-note">${
+      opts.redacted
+        ? "Requires the stats token &mdash; open /stats?token=&hellip; to reveal."
+        : "No data yet."
+    }</div>`;
+    return;
+  }
+  const max = rows.reduce((n, r) => Math.max(n, r.count), 0) || 1;
+  el.innerHTML = rows.map(r => {
+    const pct = (r.count / max * 100).toFixed(1);
+    return `<div class="m-rank">
+      <div class="m-rank-row">
+        <span class="m-rank-name" title="${esc(r.name)}">${esc(r.name)}</span>
+        ${r.tag ? `<span class="m-rank-tag">${esc(r.tag)}</span>` : ""}
+        <span class="m-rank-count">${r.count.toLocaleString()}</span>
+      </div>
+      <div class="m-bar"><div class="m-bar-fill" style="width: ${pct}%"></div></div>
+    </div>`;
+  }).join("");
+}
+
 async function loadSummary() {
   const r = await api("/api/stats/summary");
   const s = await r.json();
   const m = s.mcp, d = s.dashboard;
   // The API omits IP lists entirely (not just empties them) when no valid
-  // stats token was presented — tell the viewer that, rather than "no data".
+  // stats token was presented — say so once, at the top, rather than
+  // repeating "hidden" inside every panel.
   const redacted = !("top_ips" in m);
-  const hiddenRow = (cols) => `<tr><td colspan="${cols}" class="muted">hidden &mdash; IPs require the stats token (open /stats?token=&hellip;)</td></tr>`;
+  $("redaction-notice").hidden = !redacted;
   m.top_ips = m.top_ips || [];
   d.top_ips = d.top_ips || [];
+
   $("mcp-total").textContent = m.total.toLocaleString();
   $("mcp-errors").textContent = m.errors.toLocaleString();
   $("mcp-errpct").textContent = m.total > 0 ? `${(m.errors / m.total * 100).toFixed(1)}% error rate` : "";
@@ -32,84 +63,121 @@ async function loadSummary() {
   $("dash-total").textContent = d.total.toLocaleString();
   $("dash-ips").textContent = d.unique_ips.toLocaleString();
 
-  $("top-tools").innerHTML = m.top_tools.length
-    ? m.top_tools.map(t => `<tr><td class="tool">${esc(t.tool_name)}</td><td class="num">${t.count}</td></tr>`).join("")
-    : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
-  $("top-mcp-ips").innerHTML = m.top_ips.length
-    ? m.top_ips.map(i => `<tr><td class="ip">${esc(i.ip)}</td><td class="num">${i.count}</td></tr>`).join("")
-    : redacted ? hiddenRow(2) : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
-  $("top-dash-paths").innerHTML = d.top_paths.length
-    ? d.top_paths.map(p => `<tr><td>${esc(p.path)}</td><td>${esc(p.event_type)}</td><td class="num">${p.count}</td></tr>`).join("")
-    : `<tr><td colspan="3" class="muted">no data yet</td></tr>`;
-  $("top-dash-ips").innerHTML = d.top_ips.length
-    ? d.top_ips.map(i => `<tr><td class="ip">${esc(i.ip)}</td><td class="num">${i.count}</td></tr>`).join("")
-    : redacted ? hiddenRow(2) : `<tr><td colspan="2" class="muted">no data yet</td></tr>`;
+  renderPanel($("top-tools"), m.top_tools.map(t => ({ name: t.tool_name, count: t.count })), {});
+  renderPanel($("top-mcp-ips"), m.top_ips.map(i => ({ name: i.ip, count: i.count })), { redacted });
+  renderPanel($("top-dash-paths"), d.top_paths.map(p => ({ name: p.path, tag: p.event_type, count: p.count })), {});
+  renderPanel($("top-dash-ips"), d.top_ips.map(i => ({ name: i.ip, count: i.count })), { redacted });
 }
 
 let mcpRows = [], dashRows = [];
 
 async function loadMcpCalls() {
-  const r = await api("/api/stats/mcp?limit=300");
+  const r = await api(`/api/stats/mcp?limit=${ROW_LIMIT}`);
   const j = await r.json();
   mcpRows = j.calls;
   renderMcp();
 }
 
 async function loadDashEvents() {
-  const r = await api("/api/stats/dashboard?limit=300");
+  const r = await api(`/api/stats/dashboard?limit=${ROW_LIMIT}`);
   const j = await r.json();
   dashRows = j.events;
   renderDash();
 }
 
+// "LAST 42 OF 300" — what the table shows over what was fetched. The
+// denominator is the loaded count, not the limit, so it stays honest before
+// the database has ROW_LIMIT rows in it.
+const countNote = (shown, loaded) => `Last ${shown.toLocaleString()} of ${loaded.toLocaleString()}`;
+
+const ipCell = (r) => "ip" in r
+  ? `<td class="m-cell-ip">${esc(r.ip || "—")}</td>`
+  : `<td class="m-cell-ip m-cell-hidden">hidden</td>`;
+
+const uaCell = (r) => "user_agent" in r
+  ? `<td class="m-cell-ua" title="${esc(r.user_agent || "")}">${esc(r.user_agent || "—")}</td>`
+  : `<td class="m-cell-ua m-cell-hidden">hidden</td>`;
+
 function renderMcp() {
   const q = $("mcp-filter").value.toLowerCase();
   const rows = mcpRows.filter(r => !q || [r.tool_name, r.ip, r.arguments, r.user_agent, r.error].some(v => (v || "").toLowerCase().includes(q)));
-  $("mcp-rows").innerHTML = rows.length
-    ? rows.map(r => `
+  $("mcp-count-note").textContent = countNote(rows.length, mcpRows.length);
+  $("mcp-rows").innerHTML = rows.map(r => `
       <tr>
-        <td class="ts">${esc(fmtTs(r.ts))}</td>
-        <td class="ip">${"ip" in r ? esc(r.ip || "—") : "hidden"}</td>
-        <td class="tool">${esc(r.tool_name)}</td>
-        <td class="args">${esc(r.arguments || "{}")}</td>
-        <td>${r.success ? '<span class="badge badge-ok">OK</span>' : `<span class="badge badge-err">ERR</span> <span class="error">${esc(r.error || "")}</span>`}</td>
-        <td class="num">${r.duration_ms != null ? r.duration_ms + "ms" : "—"}</td>
-        <td class="ua" title="${esc(r.user_agent || "")}">${"user_agent" in r ? esc(r.user_agent || "—") : "hidden"}</td>
+        <td class="m-cell-ts">${esc(fmtTs(r.ts))}</td>
+        ${ipCell(r)}
+        <td class="m-cell-tool">${esc(r.tool_name)}</td>
+        <td class="m-cell-blob">${esc(r.arguments || "{}")}</td>
+        <td>${r.success
+          ? '<span class="tag tag-neutral m-stats-tag">OK</span>'
+          : `<span class="tag tag-accent m-stats-tag">ERR</span><span class="m-cell-err" title="${esc(r.error || "")}">${esc(r.error || "")}</span>`}</td>
+        <td class="m-cell-num">${r.duration_ms != null ? r.duration_ms + "ms" : "—"}</td>
+        ${uaCell(r)}
       </tr>
-    `).join("")
-    : `<tr><td colspan="7" class="muted">no MCP calls yet</td></tr>`;
+    `).join("");
+  const empty = $("mcp-empty");
+  empty.hidden = rows.length > 0;
+  empty.textContent = q ? "No tool calls match that filter." : "No tool calls yet.";
 }
 
 function renderDash() {
   const q = $("dash-filter").value.toLowerCase();
   const rows = dashRows.filter(r => !q || [r.path, r.ip, r.event_type, r.details, r.user_agent].some(v => (v || "").toLowerCase().includes(q)));
-  $("dash-rows").innerHTML = rows.length
-    ? rows.map(r => `
+  $("dash-count-note").textContent = countNote(rows.length, dashRows.length);
+  $("dash-rows").innerHTML = rows.map(r => `
       <tr>
-        <td class="ts">${esc(fmtTs(r.ts))}</td>
-        <td class="ip">${"ip" in r ? esc(r.ip || "—") : "hidden"}</td>
-        <td>${esc(r.path || "—")}</td>
-        <td><span class="badge ${r.event_type === 'chat_query' ? 'badge-chat' : 'badge-pv'}">${esc(r.event_type)}</span></td>
-        <td class="args">${esc(r.details || "")}</td>
-        <td class="ua" title="${esc(r.user_agent || "")}">${"user_agent" in r ? esc(r.user_agent || "—") : "hidden"}</td>
+        <td class="m-cell-ts">${esc(fmtTs(r.ts))}</td>
+        ${ipCell(r)}
+        <td class="m-cell-path">${esc(r.path || "—")}</td>
+        <td><span class="tag ${r.event_type === "chat_query" ? "tag-outline" : "tag-neutral"} m-stats-tag">${esc(r.event_type)}</span></td>
+        <td class="m-cell-blob m-cell-detail">${esc(r.details || "")}</td>
+        ${uaCell(r)}
       </tr>
-    `).join("")
-    : `<tr><td colspan="6" class="muted">no dashboard events yet</td></tr>`;
+    `).join("");
+  const empty = $("dash-empty");
+  empty.hidden = rows.length > 0;
+  empty.textContent = q ? "No events match that filter." : "No dashboard events yet.";
+}
+
+// ── Refresh loop ───────────────────────────────────────────────────────────
+// One 1s timer drives both the header countdown and the reload, so the label
+// can't drift away from when the fetch actually happens.
+let remaining = REFRESH_SEC, inFlight = false;
+
+function paintCountdown() {
+  $("live-label").textContent = `Auto-refresh · ${remaining}s`;
 }
 
 async function refresh() {
-  await Promise.all([loadSummary(), loadMcpCalls(), loadDashEvents()]);
+  if (inFlight) return;
+  inFlight = true;
+  remaining = REFRESH_SEC;
+  paintCountdown();
+  try {
+    await Promise.all([loadSummary(), loadMcpCalls(), loadDashEvents()]);
+  } finally {
+    inFlight = false;
+  }
 }
+
+setInterval(() => {
+  if (inFlight) return;
+  remaining -= 1;
+  if (remaining <= 0) refresh();
+  else paintCountdown();
+}, 1000);
 
 $("mcp-filter").addEventListener("input", renderMcp);
 $("dash-filter").addEventListener("input", renderDash);
+$("mcp-clear").addEventListener("click", () => { $("mcp-filter").value = ""; renderMcp(); });
+$("dash-clear").addEventListener("click", () => { $("dash-filter").value = ""; renderDash(); });
 $("refresh-btn").addEventListener("click", refresh);
-// Expand/collapse long argument cells via delegation (no inline handlers, so
-// the page can run under a script-src 'self' CSP).
+// Expand/collapse long argument and detail cells via delegation (no inline
+// handlers, so the page can run under a script-src 'self' CSP).
 document.addEventListener("click", (e) => {
-  const td = e.target.closest("td.args");
+  const td = e.target.closest("td.m-cell-blob");
   if (td) td.classList.toggle("expanded");
 });
 
+paintCountdown();
 refresh();
-setInterval(refresh, 30000);

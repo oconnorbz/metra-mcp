@@ -495,6 +495,131 @@ textarea.input { min-height: 90px; resize: vertical; }
   .m-empty { padding-top: 32px; }
 }
 
+/* — stats dashboard — */
+/* The .m-* layer sets display on several of these, which would beat the UA's
+   [hidden] rule; make the attribute win so JS can toggle with el.hidden. */
+[hidden] { display: none !important; }
+/* Shown only when /api/stats redacts IPs, i.e. no valid stats token. */
+.m-notice {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding: 11px 32px; border-bottom: 2px solid var(--color-divider);
+  background: var(--color-accent-100);
+  font-size: 13px; color: var(--color-accent-900);
+}
+.m-notice-label {
+  font-family: var(--font-heading); font-weight: 800; font-size: 11px;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-accent-800);
+}
+/* Wrapping flex on purpose, not repeat(auto-fit, minmax(...)): a grid leaves
+   dead tracks beside the last cell at intermediate widths, while flex-grow
+   fills every row it wraps to. Applies to both the KPI band and the panels. */
+.m-band { display: flex; flex-wrap: wrap; border-bottom: 2px solid var(--color-divider); }
+.m-kpi {
+  flex: 1 1 200px; min-width: 0; padding: 22px 24px 20px;
+  border-right: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-divider);
+}
+.m-kpi .m-label { display: block; margin-bottom: 12px; }
+.m-kpi-val {
+  font-family: var(--font-heading); font-weight: 800;
+  font-size: clamp(30px, 3.4vw, 44px); line-height: 1;
+  letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+}
+.m-kpi-sub {
+  margin-top: 9px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  min-height: 1em;
+}
+.m-panel {
+  flex: 1 1 340px; min-width: 0;
+  border-right: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-divider);
+}
+.m-panel-head { display: flex; align-items: baseline; gap: 12px; padding: 16px 24px 12px; }
+.m-panel-title {
+  font-family: var(--font-heading); font-weight: 800; font-size: 13px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.m-panel-note {
+  margin-left: auto; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+.m-rank { padding: 9px 24px; border-bottom: 1px solid var(--color-divider); }
+.m-rank:first-child { border-top: 1px solid var(--color-divider); }
+.m-rank-row { display: flex; align-items: baseline; gap: 10px; }
+.m-rank-name {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 13px;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.m-rank-tag {
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+.m-rank-count {
+  margin-left: auto; font-family: var(--font-heading); font-weight: 800; font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+/* The one data graphic on the page: proportional to the panel's top row. */
+.m-bar { height: 3px; margin-top: 7px; background: color-mix(in srgb, var(--color-text) 10%, transparent); }
+.m-bar-fill { height: 100%; background: var(--color-accent); }
+.m-filter-row { display: flex; gap: 10px; align-items: stretch; max-width: 560px; padding: 0 32px 16px; }
+.m-filter-row .input { min-height: 38px; background: var(--color-bg); }
+.m-empty-note {
+  padding: 14px 24px 20px; font-size: 13px;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+/* Both big tables scroll horizontally rather than stacking; the first and
+   last cells carry the page's 32px gutter so columns line up with the rules. */
+/* table-layout: fixed so the per-column widths below actually bind and the
+   ellipsis on the blob/user-agent cells has something to clip against. */
+.m-tablewrap { overflow-x: auto; border-top: 1px solid var(--color-divider); }
+.m-tablewrap .table { table-layout: fixed; }
+.m-tablewrap .table th:first-child, .m-tablewrap .table td:first-child { padding-left: 32px; }
+.m-tablewrap .table th:last-child, .m-tablewrap .table td:last-child { padding-right: 32px; }
+.m-cell-ts {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+.m-cell-ip { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px; }
+.m-cell-hidden { color: color-mix(in srgb, var(--color-text) 35%, transparent); }
+.m-cell-tool {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 13px; font-weight: 600;
+}
+.m-cell-path { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 13px; }
+/* Long argument/detail blobs are clipped until clicked (delegated handler). */
+.m-cell-blob {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.m-cell-blob.expanded { white-space: normal; word-break: break-all; }
+.m-cell-detail { font-family: var(--font-body); font-size: 13px; }
+.m-cell-num { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+.m-cell-ua {
+  font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+}
+.m-cell-err {
+  display: block; margin-top: 3px; font-size: 11px; color: var(--color-accent-700);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.m-stats-tag { text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600; }
+
+/* Four cells wrap 4-up, then 2+2, then 1-up — but a bare flex-basis also
+   allows 3+1 at the widths in between, which orphans the last cell into a
+   full-width banner. Below the width where all four fit, force two per row. */
+@media (max-width: 819px) { .m-kpi { flex-basis: 46%; } }
+@media (max-width: 1359px) { .m-panel { flex-basis: 46%; } }
+@media (max-width: 700px) { .m-panel { flex-basis: 100%; } }
+
+@media (max-width: 860px) {
+  .m-kpi, .m-panel-head, .m-rank, .m-empty-note { padding-left: 20px; padding-right: 20px; }
+  .m-notice, .m-filter-row, .m-stats-sec-head { padding-left: 20px; padding-right: 20px; }
+  .m-tablewrap .table th:first-child, .m-tablewrap .table td:first-child { padding-left: 20px; }
+  .m-tablewrap .table th:last-child, .m-tablewrap .table td:last-child { padding-right: 20px; }
+}
+
 /* ── Copilot response vocabulary ──────────────────────────────────────────
    The model is told (server-side system prompt) to build fragments out of
    exactly these classes. DOMPurify strips style attributes, so a fragment
