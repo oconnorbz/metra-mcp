@@ -110,8 +110,12 @@ in front of it — for inspection, DLP, or model policy — set:
 
 ```bash
 METRA_ANTHROPIC_BASE_URL=https://ai-gw.example.com
-METRA_ANTHROPIC_EXTRA_HEADERS=x-ns-aig-slug: claude
+METRA_ANTHROPIC_EXTRA_HEADERS="x-ns-aig-slug: claude, x-ns-aig-apikey: <jwt>"
 ```
+
+(Those two header names are Netskope AI Gateway's: the slug selects the route,
+`x-ns-aig-apikey` carries the tenant JWT. `ANTHROPIC_API_KEY` is still sent as
+`x-api-key` for the gateway to forward upstream.)
 
 The proxy then POSTs to `<base>/v1/messages` and merges those headers over its
 own (so a gateway can also supply an auth header). Two requirements the
