@@ -77,7 +77,12 @@ When `--http` is set the server binds `0.0.0.0:8080` (override with
 - `GET /` — documentation page
 - `GET /copilot` — chat UI (requires `ANTHROPIC_API_KEY`)
 - `GET /stats` — usage dashboard
-- `GET /topo` — topology diagram of the copilot request path
+- `GET /topo` — topology diagram of the copilot request path. Public by
+  default; presenting the stats token (`/topo?token=…` or an `x-stats-token`
+  header) splices in an internal layer from `web/topo.internal.html`, if that
+  file is installed (it is not in this repo — see Frontend). Without the token,
+  without the file, or without `METRA_STATS_TOKEN` set, the internal slots are
+  deleted from the response rather than hidden
 - `GET /health` — liveness/readiness JSON
 - `POST /mcp` — streamable HTTP transport
 - `GET /sse` + `POST /messages/` — legacy SSE transport (opt-in via
@@ -152,6 +157,23 @@ attributes from model output, so a fragment can only ever render as the design
 system. The list is spelled out in `_CHAT_SYSTEM_PROMPT` in `server.py`; change
 the stylesheet and the prompt in the same commit or model output will render
 unstyled.
+
+`/topo` is one hand-written page (`web/topo.html`) whose diagram is inline SVG —
+no script, no build step. It carries `<!--INTERNAL-SLOT name-->` placeholders
+that `handle_topo` fills from `web/topo.internal.html`, and only for a caller
+holding the stats token; everyone else gets the slot deleted, along with the
+`<!--BEGIN PUBLIC-->…<!--END PUBLIC-->` blocks being kept instead.
+
+That fragment file is **gitignored on purpose**. It is where a deployment's own
+detail goes — host placement, addresses, unit and state paths, the deploy
+procedure — so this repo stays free of it and the page still renders without
+it (no fragment, or no `METRA_STATS_TOKEN`, means the public version). Its
+format is a flat list of `<!--SLOT name-->…<!--END SLOT-->` sections whose names
+match the slots in the page. Nothing relies on CSS to hide anything.
+
+If a fragment contains a shell snippet with a `user@host` in it, wrap it in
+`<!--email_off-->`: Cloudflare's email obfuscation otherwise rewrites the
+address into `[email protected]` and injects its decoder script.
 
 `/` is hand-written HTML (`web/docs.html`) plus `web/docs.js` for the clipboard
 buttons, the client-snippet picker and the live line board. `/stats` is the

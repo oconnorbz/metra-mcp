@@ -1126,6 +1126,8 @@ def main():
 
         _stats_html = _web_dir / "stats.html"
         _topo_html = _web_dir / "topo.html"
+        # Optional, and deliberately absent from the repo: see _internal_slots.
+        _topo_internal_html = _web_dir / "topo.internal.html"
 
         # no-cache so UI/API changes take effect on the next page load instead
         # of stale JS hitting a newer API contract.
@@ -1175,11 +1177,75 @@ def main():
             except OSError:
                 return "0"
 
-        def _html_page(path) -> Response:
+        def _html_page(path, *, transform=None, headers=_HTML_HEADERS) -> Response:
             html = path.read_text(encoding="utf-8")
+            if transform is not None:
+                html = transform(html)
             for asset in _VERSIONED_ASSETS:
                 html = html.replace(f'"{asset}"', f'"{asset}?v={_asset_stamp(asset)}"')
-            return Response(html, media_type="text/html", headers=_HTML_HEADERS)
+            return Response(html, media_type="text/html", headers=headers)
+
+        def _drop_blocks(html: str, name: str) -> str:
+            """Remove every <!--BEGIN name--> … <!--END name--> region."""
+            start, end = f"<!--BEGIN {name}-->", f"<!--END {name}-->"
+            while True:
+                i = html.find(start)
+                if i == -1:
+                    return html
+                j = html.find(end, i)
+                if j == -1:
+                    # Unclosed marker: drop the rest rather than leak it.
+                    return html[:i]
+                html = html[:i] + html[j + len(end):]
+
+        def _internal_slots() -> dict[str, str]:
+            """Named fragments for /topo's internal layer.
+
+            They live in web/topo.internal.html, which ships to the server but
+            is kept out of the repo — the published source therefore carries
+            no site addressing at all. A missing file just means {}, i.e. the
+            public page, so this fails closed on a fresh checkout.
+            """
+            try:
+                raw = _topo_internal_html.read_text(encoding="utf-8")
+            except OSError:
+                return {}
+            slots: dict[str, str] = {}
+            open_tag, close_tag = "<!--SLOT ", "<!--END SLOT-->"
+            pos = 0
+            while True:
+                i = raw.find(open_tag, pos)
+                if i == -1:
+                    return slots
+                j = raw.find("-->", i)
+                k = raw.find(close_tag, j) if j != -1 else -1
+                if j == -1 or k == -1:
+                    return slots
+                slots[raw[i + len(open_tag):j].strip()] = raw[j + 3:k]
+                pos = k + len(close_tag)
+
+        def _topo_body(html: str, slots: dict[str, str]) -> str:
+            """Fill <!--INTERNAL-SLOT name--> from `slots`, or erase them.
+
+            An unknown name yields nothing, so a stale marker can't turn into
+            a hole in the page. With the internal layer in, the public-only
+            blocks come out.
+            """
+            marker = "<!--INTERNAL-SLOT "
+            out, pos = [], 0
+            while True:
+                i = html.find(marker, pos)
+                j = html.find("-->", i) if i != -1 else -1
+                if i == -1 or j == -1:
+                    out.append(html[pos:])
+                    break
+                out.append(html[pos:i])
+                out.append(slots.get(html[i + len(marker):j].strip(), ""))
+                pos = j + 3
+            html = "".join(out)
+            if slots:
+                html = _drop_blocks(html, "PUBLIC")
+            return html.replace("<!--BEGIN PUBLIC-->\n", "").replace("<!--END PUBLIC-->\n", "")
 
         async def handle_docs(request):
             stats.record_dashboard_event("page_view", {"page": "docs"})
@@ -1194,8 +1260,19 @@ def main():
             return _html_page(_stats_html)
 
         async def handle_topo(request):
-            stats.record_dashboard_event("page_view", {"page": "topo"})
-            return _html_page(_topo_html)
+            # The internal layer (host placement, LAN addresses, unit paths,
+            # deploy procedure) rides on the same credential /stats uses to
+            # unlock source IPs: METRA_STATS_TOKEN, as ?token= or
+            # x-stats-token. Without it — or without the fragment file
+            # installed — the page is the public version.
+            slots = _internal_slots() if _stats_full_access(request) else {}
+            stats.record_dashboard_event("page_view", {"page": "topo", "internal": bool(slots)})
+            return _html_page(
+                _topo_html,
+                transform=lambda h: _topo_body(h, slots),
+                # Don't let the unlocked version sit in any shared cache.
+                headers={"Cache-Control": "no-store, private"} if slots else _HTML_HEADERS,
+            )
 
         async def handle_health(request):
             """Liveness + basic readiness for reverse proxies / monitoring."""

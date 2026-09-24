@@ -39,6 +39,11 @@
                letter-spacing: 0.1em; fill: color-mix(in srgb, var(--color-text) 60%, transparent); }
     .d-label-accent { fill: var(--color-accent-700); }
     .d-note { font-size: 11px; fill: color-mix(in srgb, var(--color-text) 62%, transparent); }
+    /* Styles the internal annotations that get spliced into the diagram's
+       slots. The text itself is not in this file; unlocking it needs the
+       stats token, and the public response has no element to style. */
+    .d-int { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10px;
+             fill: var(--color-accent-700); }
 
     .t-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
     .t-step { display: flex; gap: 14px; padding: 18px 32px; border-bottom: 1px solid var(--color-divider);
@@ -69,6 +74,12 @@
       <a href="/copilot" class="btn btn-primary" style="text-transform: uppercase; letter-spacing: 0.06em;">Launch Copilot</a>
     </div>
   </div>
+
+  <!-- Slots are filled from web/topo.internal.html — a file that ships to the
+       server but not to the repo — and only for a caller holding the stats
+       token. Everyone else gets the slot removed. Never put site-internal
+       detail in this file; put it in the fragment. -->
+  <!--INTERNAL-SLOT notice-->
 
   <!-- ── Intro ──────────────────────────────────────────────────────────── -->
   <div style="border-bottom: 2px solid var(--color-divider); padding: 40px 32px 32px;">
@@ -121,8 +132,10 @@
         <text class="d-title" x="636" y="108">cloudflared</text>
         <text class="d-sub" x="636" y="130">outbound tunnel</text>
         <text class="d-sub" x="636" y="148">no inbound ports</text>
+        <!--INTERNAL-SLOT svg-tunnel-->
 
         <!-- 04 Origin -->
+        <!--INTERNAL-SLOT svg-origin-->
         <rect class="d-box" x="910" y="30" width="270" height="200"></rect>
         <text class="d-num" x="926" y="56">04</text>
         <text class="d-title" x="926" y="78">metra-mcp origin</text>
@@ -140,6 +153,7 @@
         <text class="d-title" x="636" y="378">Netskope AI GW</text>
         <text class="d-sub" x="636" y="400">ai-gw &middot; /v1/messages</text>
         <text class="d-sub" x="636" y="418">slug + tenant JWT</text>
+        <!--INTERNAL-SLOT svg-gateway-->
 
         <!-- 06 Anthropic -->
         <rect class="d-box" x="330" y="330" width="210" height="110"></rect>
@@ -292,7 +306,10 @@
           <tr><td>Metra GTFS feeds</td><td><code>metrarr.com</code> / <code>metrarail.com</code></td><td>Realtime vehicle, trip and alert feeds; daily static schedule</td></tr>
         </tbody>
       </table>
-      <div class="m-label" id="parts-caption" style="letter-spacing: 0.08em; margin-top: 12px; color: color-mix(in srgb, var(--color-text) 45%, transparent);">Internal addressing is deliberately omitted &mdash; this page is public.</div>
+<!--BEGIN PUBLIC-->
+      <div class="m-label" style="letter-spacing: 0.08em; margin-top: 12px; color: color-mix(in srgb, var(--color-text) 45%, transparent);">Internal addressing is deliberately omitted &mdash; this page is public.</div>
+<!--END PUBLIC-->
+      <!--INTERNAL-SLOT caption-->
     </div>
   </div>
 
@@ -315,6 +332,8 @@
       </div>
     </div>
   </div>
+
+  <!--INTERNAL-SLOT detail-->
 
   <!-- ── Poster close ───────────────────────────────────────────────────── -->
   <div class="m-poster">

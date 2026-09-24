@@ -15,6 +15,10 @@ env/
 # Local config & secrets
 .env
 .env.local
+# /topo's internal layer: host placement, LAN addresses, unit paths, deploy
+# procedure. Ships to the server on its own so this repo — which is public —
+# carries none of it. The page renders without it.
+src/metra_mcp/web/topo.internal.html
 # Claude Code per-machine settings (permission grants can embed local tokens)
 .claude/
 
