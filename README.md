@@ -77,6 +77,7 @@ When `--http` is set the server binds `0.0.0.0:8080` (override with
 - `GET /` — documentation page
 - `GET /copilot` — chat UI (requires `ANTHROPIC_API_KEY`)
 - `GET /stats` — usage dashboard
+- `GET /topo` — topology diagram of the copilot request path
 - `GET /health` — liveness/readiness JSON
 - `POST /mcp` — streamable HTTP transport
 - `GET /sse` + `POST /messages/` — legacy SSE transport (opt-in via

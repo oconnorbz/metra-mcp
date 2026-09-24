@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Topology &mdash; Metra MCP Server</title>
+  <meta name="description" content="How a Copilot question travels: browser, Cloudflare tunnel, the Metra MCP origin, the Netskope AI Gateway and Anthropic's API — including the tool callback that bypasses the gateway.">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
+  <link rel="stylesheet" href="/modernist.css">
+  <style>
+    a:hover { color: var(--color-accent-700); }
+    code, pre, .mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+
+    /* ── Diagram ──────────────────────────────────────────────────────────
+       The drawing is one inline SVG so it inherits the design tokens and
+       needs no script. Below ~1000px it scrolls horizontally rather than
+       shrinking the labels into illegibility. */
+    .d-wrap { overflow-x: auto; padding: 24px 32px 8px; }
+    .d-svg { width: 100%; min-width: 980px; height: auto; display: block; }
+
+    .d-box { fill: var(--color-bg); stroke: var(--color-text); stroke-width: 2; }
+    .d-inner { fill: var(--color-surface); stroke: var(--color-divider); stroke-width: 1; }
+    .d-num { font-family: var(--font-heading); font-weight: 800; font-size: 11px;
+             letter-spacing: 0.14em; fill: var(--color-accent); }
+    .d-title { font-family: var(--font-heading); font-weight: 800; font-size: 14px;
+               letter-spacing: 0.03em; fill: var(--color-text); }
+    .d-sub { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11px;
+             fill: color-mix(in srgb, var(--color-text) 62%, transparent); }
+    .d-inner-txt { font-family: var(--font-heading); font-weight: 800; font-size: 10px;
+                   letter-spacing: 0.1em; fill: var(--color-text); }
+    .d-inner-sub { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 10px;
+                   fill: color-mix(in srgb, var(--color-text) 62%, transparent); }
+    .d-edge { fill: none; stroke: var(--color-text); stroke-width: 2; }
+    .d-edge-accent { fill: none; stroke: var(--color-accent); stroke-width: 2; }
+    .d-dash { stroke-dasharray: 7 5; }
+    .d-label { font-family: var(--font-heading); font-weight: 800; font-size: 10px;
+               letter-spacing: 0.1em; fill: color-mix(in srgb, var(--color-text) 60%, transparent); }
+    .d-label-accent { fill: var(--color-accent-700); }
+    .d-note { font-size: 11px; fill: color-mix(in srgb, var(--color-text) 62%, transparent); }
+
+    .t-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+    .t-step { display: flex; gap: 14px; padding: 18px 32px; border-bottom: 1px solid var(--color-divider);
+              border-right: 1px solid var(--color-divider); }
+    .t-step-num { font-family: var(--font-heading); font-weight: 800; font-size: 11px;
+                  letter-spacing: 0.14em; color: var(--color-accent); flex: none; padding-top: 3px; }
+    .t-step-name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .t-step-desc { font-size: 13px; line-height: 1.5; max-width: 52ch;
+                   color: color-mix(in srgb, var(--color-text) 68%, transparent); }
+    .t-legend { display: flex; flex-wrap: wrap; gap: 24px; padding: 4px 32px 32px; }
+    .t-legend-item { display: flex; align-items: center; gap: 10px; font-size: 12px;
+                     color: color-mix(in srgb, var(--color-text) 68%, transparent); }
+  </style>
+</head>
+<body class="m-page">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <div class="m-head" style="position: sticky; top: 0; z-index: 10; padding: 14px 32px;">
+    <div class="m-brand">
+      <span class="m-brand-name" style="font-size: 18px;">METRA MCP</span>
+      <span class="m-brand-sub">Topology</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 20px;">
+      <a href="/" class="m-nav-link">Home</a>
+      <a href="#flow" class="m-nav-link">Flow</a>
+      <a href="#parts" class="m-nav-link">Components</a>
+      <a href="/stats" class="m-nav-link">Stats</a>
+      <a href="/copilot" class="btn btn-primary" style="text-transform: uppercase; letter-spacing: 0.06em;">Launch Copilot</a>
+    </div>
+  </div>
+
+  <!-- ── Intro ──────────────────────────────────────────────────────────── -->
+  <div style="border-bottom: 2px solid var(--color-divider); padding: 40px 32px 32px;">
+    <div class="m-eyebrow">
+      <span class="m-sq"></span>
+      <span>Architecture &middot; one question, end to end</span>
+    </div>
+    <h1 style="font-size: 42px; letter-spacing: -0.025em; max-width: 20ch; margin: 0 0 12px;">What happens when you ask the Copilot a question.</h1>
+    <p class="m-lede" style="max-width: 62ch;">Every Copilot answer crosses five systems: a Cloudflare tunnel, this origin, an inline AI gateway, Anthropic's API &mdash; and then Anthropic calls back into the MCP server to run the tools. That callback does not go through the gateway, which is the one thing worth knowing about this diagram.</p>
+  </div>
+
+  <!-- ── Diagram ────────────────────────────────────────────────────────── -->
+  <div style="border-bottom: 2px solid var(--color-divider);">
+    <div class="m-sec-head" style="padding: 32px 32px 0;">
+      <h2>The path</h2>
+      <span class="m-sec-note">Arrows show request direction &middot; responses stream back the same way</span>
+    </div>
+
+    <div class="d-wrap">
+      <svg class="d-svg" viewBox="0 0 1280 660" role="img" aria-labelledby="topo-title topo-desc">
+        <title id="topo-title">Metra MCP Copilot topology</title>
+        <desc id="topo-desc">A visitor's browser reaches Cloudflare, which forwards over a cloudflared tunnel to the metra-mcp origin. The origin's chat proxy posts to the Netskope AI Gateway, which forwards to the Anthropic API. Anthropic's MCP connector calls the public MCP endpoint back through Cloudflare and the tunnel, bypassing the gateway. The MCP server reads Metra's GTFS feeds directly outbound.</desc>
+
+        <defs>
+          <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#201e1d"></path>
+          </marker>
+          <marker id="ah-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ec3013"></path>
+          </marker>
+        </defs>
+
+        <!-- 01 Visitor -->
+        <rect class="d-box" x="40" y="60" width="210" height="110"></rect>
+        <text class="d-num" x="56" y="86">01</text>
+        <text class="d-title" x="56" y="108">Visitor</text>
+        <text class="d-sub" x="56" y="130">browser &rarr; /copilot</text>
+        <text class="d-sub" x="56" y="148">MCP client &rarr; /mcp</text>
+
+        <!-- 02 Cloudflare -->
+        <rect class="d-box" x="330" y="60" width="210" height="110"></rect>
+        <text class="d-num" x="346" y="86">02</text>
+        <text class="d-title" x="346" y="108">Cloudflare edge</text>
+        <text class="d-sub" x="346" y="130">metra.remote-mcp.dev</text>
+        <text class="d-sub" x="346" y="148">TLS &middot; asset cache</text>
+
+        <!-- 03 cloudflared -->
+        <rect class="d-box" x="620" y="60" width="210" height="110"></rect>
+        <text class="d-num" x="636" y="86">03</text>
+        <text class="d-title" x="636" y="108">cloudflared</text>
+        <text class="d-sub" x="636" y="130">outbound tunnel</text>
+        <text class="d-sub" x="636" y="148">no inbound ports</text>
+
+        <!-- 04 Origin -->
+        <rect class="d-box" x="910" y="30" width="270" height="200"></rect>
+        <text class="d-num" x="926" y="56">04</text>
+        <text class="d-title" x="926" y="78">metra-mcp origin</text>
+        <text class="d-sub" x="926" y="96">Starlette + uvicorn &middot; :8080</text>
+        <rect class="d-inner" x="926" y="108" width="238" height="44"></rect>
+        <text class="d-inner-txt" x="938" y="126">COPILOT WEB</text>
+        <text class="d-inner-sub" x="938" y="142">/ &middot; /copilot &middot; /stats &middot; /api/chat</text>
+        <rect class="d-inner" x="926" y="160" width="238" height="44"></rect>
+        <text class="d-inner-txt" x="938" y="178">MCP SERVER</text>
+        <text class="d-inner-sub" x="938" y="194">/mcp &middot; 10 GTFS tools</text>
+
+        <!-- 05 Netskope AI Gateway -->
+        <rect class="d-box" x="620" y="330" width="210" height="110"></rect>
+        <text class="d-num" x="636" y="356">05</text>
+        <text class="d-title" x="636" y="378">Netskope AI GW</text>
+        <text class="d-sub" x="636" y="400">ai-gw &middot; /v1/messages</text>
+        <text class="d-sub" x="636" y="418">slug + tenant JWT</text>
+
+        <!-- 06 Anthropic -->
+        <rect class="d-box" x="330" y="330" width="210" height="110"></rect>
+        <text class="d-num" x="346" y="356">06</text>
+        <text class="d-title" x="346" y="378">Anthropic API</text>
+        <text class="d-sub" x="346" y="400">claude-sonnet-5</text>
+        <text class="d-sub" x="346" y="418">streaming + MCP</text>
+
+        <!-- 07 Metra feeds -->
+        <rect class="d-box" x="910" y="520" width="270" height="110"></rect>
+        <text class="d-num" x="926" y="546">07</text>
+        <text class="d-title" x="926" y="568">Metra GTFS feeds</text>
+        <text class="d-sub" x="926" y="590">gtfspublic.metrarr.com</text>
+        <text class="d-sub" x="926" y="608">schedules.metrarail.com</text>
+
+        <!-- Ingress path -->
+        <path class="d-edge" d="M 250 115 H 322" marker-end="url(#ah)"></path>
+        <text class="d-label" x="286" y="104" text-anchor="middle">HTTPS</text>
+        <path class="d-edge" d="M 540 115 H 612" marker-end="url(#ah)"></path>
+        <text class="d-label" x="576" y="104" text-anchor="middle">TUNNEL</text>
+        <path class="d-edge" d="M 830 115 H 902" marker-end="url(#ah)"></path>
+        <text class="d-label" x="866" y="104" text-anchor="middle">:8080</text>
+
+        <!-- Model traffic: origin -> gateway -> Anthropic -->
+        <path class="d-edge-accent" d="M 1000 230 V 385 H 838" marker-end="url(#ah-a)"></path>
+        <text class="d-label d-label-accent" x="1012" y="300">/api/chat</text>
+        <text class="d-label d-label-accent" x="1012" y="316">PROXY</text>
+        <text class="d-label d-label-accent" x="930" y="375" text-anchor="middle">POST /v1/messages</text>
+        <path class="d-edge-accent" d="M 620 385 H 548" marker-end="url(#ah-a)"></path>
+        <text class="d-label d-label-accent" x="584" y="375" text-anchor="middle">MODEL</text>
+
+        <!-- Tool callback: Anthropic -> public /mcp, around the gateway -->
+        <path class="d-edge-accent d-dash" d="M 435 330 V 178" marker-end="url(#ah-a)"></path>
+        <text class="d-note" x="452" y="244">MCP connector calls</text>
+        <text class="d-note" x="452" y="260">metra.remote-mcp.dev/mcp</text>
+        <text class="d-note" x="452" y="276">directly &mdash; the tool traffic</text>
+        <text class="d-note" x="452" y="292">never reaches the gateway</text>
+
+        <!-- Feed egress -->
+        <path class="d-edge d-dash" d="M 1110 230 V 512" marker-end="url(#ah)"></path>
+        <text class="d-note" x="1122" y="360">outbound HTTPS,</text>
+        <text class="d-note" x="1122" y="376">read per tool call</text>
+
+        <!-- Legend -->
+        <text class="d-label" x="40" y="498">LEGEND</text>
+        <path class="d-edge" d="M 40 520 H 84"></path>
+        <text class="d-note" x="96" y="524">Browser and MCP request path</text>
+        <path class="d-edge-accent" d="M 40 552 H 84"></path>
+        <text class="d-note" x="96" y="556">Model traffic &mdash; inspected by the gateway</text>
+        <path class="d-edge-accent d-dash" d="M 40 584 H 84"></path>
+        <text class="d-note" x="96" y="588">Tool callback &mdash; bypasses the gateway</text>
+        <path class="d-edge d-dash" d="M 40 616 H 84"></path>
+        <text class="d-note" x="96" y="620">Direct egress to the data source</text>
+      </svg>
+    </div>
+
+    <div class="t-legend">
+      <div class="t-legend-item"><span class="m-sq"></span>Responses stream back hop by hop as server-sent events &mdash; nothing buffers.</div>
+    </div>
+  </div>
+
+  <!-- ── Flow ───────────────────────────────────────────────────────────── -->
+  <div id="flow" style="border-bottom: 2px solid var(--color-divider);">
+    <div class="m-sec-head" style="padding: 40px 32px 20px;">
+      <h2>Seven hops</h2>
+      <span class="m-sec-note">Ask &ldquo;is the BNSF on time?&rdquo; and this is what happens</span>
+    </div>
+    <div class="t-grid" style="border-top: 1px solid var(--color-divider);">
+      <div class="t-step">
+        <span class="t-step-num">01</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">Visitor</div>
+          <div class="t-step-desc">A browser opens <code>/copilot</code> &mdash; a small React app served from this origin, with React and DOMPurify vendored locally so the page runs under <code>script-src 'self'</code>. The same hostname also serves <code>/mcp</code> to MCP clients like Claude Desktop, Claude Code and claude.ai, which skip the chat UI entirely.</div>
+        </div>
+      </div>
+      <div class="t-step">
+        <span class="t-step-num">02</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">Cloudflare edge</div>
+          <div class="t-step-desc">Terminates TLS for <code>metra.remote-mcp.dev</code> and passes the client IP in <code>cf-connecting-ip</code>. It caches <code>.css</code> and <code>.js</code> on its own schedule regardless of the origin's no-cache, so each HTML page stamps its asset URLs with the file's mtime &mdash; a deploy changes the URL and the edge has to refetch.</div>
+        </div>
+      </div>
+      <div class="t-step">
+        <span class="t-step-num">03</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">cloudflared tunnel</div>
+          <div class="t-step-desc">A connector on the lab network holds an outbound tunnel to Cloudflare and forwards to port 8080. The origin publishes no inbound ports and is the only trusted proxy the server will believe forwarding headers from; anything else gets its raw peer address recorded instead.</div>
+        </div>
+      </div>
+      <div class="t-step">
+        <span class="t-step-num">04</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">metra-mcp origin</div>
+          <div class="t-step-desc">One Starlette process serves the three pages, the MCP endpoint and the <code>/api/chat</code> proxy. The proxy is the part that spends money, so it is fenced: per-IP and global daily request caps, a body-size and message-count limit, a model allowlist, and a server-side system prompt the client cannot touch.</div>
+        </div>
+      </div>
+      <div class="t-step">
+        <span class="t-step-num">05</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">Netskope AI Gateway</div>
+          <div class="t-step-desc">Instead of <code>api.anthropic.com</code>, the proxy posts to the gateway's <code>/v1/messages</code> with a routing slug and a tenant JWT; the Anthropic key rides along in <code>x-api-key</code> for the gateway to forward upstream. It has to pass SSE through unbuffered &mdash; a gateway that holds the response would trip Cloudflare's first-byte timeout on tool-heavy questions.</div>
+        </div>
+      </div>
+      <div class="t-step">
+        <span class="t-step-num">06</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">Anthropic API</div>
+          <div class="t-step-desc">The request carries the MCP connector beta and an <code>mcp_servers</code> block naming this server's public URL. Claude decides which tools to call and calls them itself &mdash; back in over Cloudflare and the tunnel, not back down the gateway connection. The gateway therefore sees the prompt, the answer and the tool-use blocks in the stream, but not the tool traffic.</div>
+        </div>
+      </div>
+      <div class="t-step">
+        <span class="t-step-num">07</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">Metra GTFS feeds</div>
+          <div class="t-step-desc">Tool calls read Metra's public feeds directly outbound: realtime positions, trip updates and alerts per call (briefly cached), and the static schedule from the published GTFS zip, refreshed on a timer. That egress leaves the origin on its own &mdash; it crosses neither Cloudflare nor the gateway.</div>
+        </div>
+      </div>
+      <div class="t-step">
+        <span class="t-step-num">&rarr;</span>
+        <div style="min-width: 0;">
+          <div class="t-step-name">And back</div>
+          <div class="t-step-desc">Tokens stream home along the same chain and the proxy relays the SSE bytes untouched. The browser renders the answer through DOMPurify with <code>style</code> attributes stripped, so model output can only ever paint itself in the site's own class vocabulary. Anything the gateway rejects arrives as an SSE <code>error</code> event and is shown as-is.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Components ─────────────────────────────────────────────────────── -->
+  <div id="parts" style="border-bottom: 2px solid var(--color-divider);">
+    <div class="m-sec-head" style="padding: 40px 32px 20px;">
+      <h2>Components</h2>
+      <span class="m-sec-note">What runs where</span>
+    </div>
+    <div style="padding: 0 32px 40px; overflow-x: auto;">
+      <table class="table" style="min-width: 680px;">
+        <thead>
+          <tr>
+            <th style="width: 210px;">Component</th>
+            <th style="width: 200px;">Runs on</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>Cloudflare edge</td><td><code>remote-mcp.dev</code> zone</td><td>TLS termination, DDoS absorption, edge caching of static assets</td></tr>
+          <tr><td>cloudflared</td><td>Docker host, lab network</td><td>Outbound-only tunnel to the edge; the origin's single trusted proxy</td></tr>
+          <tr><td>Copilot web server</td><td>metra-mcp container, :8080</td><td>Serves <code>/</code>, <code>/copilot</code>, <code>/stats</code>, <code>/topo</code> and the <code>/api/chat</code> proxy</td></tr>
+          <tr><td>Metra MCP server</td><td>Same process, <code>/mcp</code></td><td>Ten GTFS tools over streamable HTTP, with a Host allowlist</td></tr>
+          <tr><td>Netskope AI Gateway</td><td>Lab VM, <code>ai-gw</code></td><td>Inline inspection of the Anthropic Messages traffic; slug routing, tenant auth</td></tr>
+          <tr><td>Anthropic API</td><td><code>api.anthropic.com</code></td><td>Runs the model, drives the MCP connector callbacks</td></tr>
+          <tr><td>Metra GTFS feeds</td><td><code>metrarr.com</code> / <code>metrarail.com</code></td><td>Realtime vehicle, trip and alert feeds; daily static schedule</td></tr>
+        </tbody>
+      </table>
+      <div class="m-label" id="parts-caption" style="letter-spacing: 0.08em; margin-top: 12px; color: color-mix(in srgb, var(--color-text) 45%, transparent);">Internal addressing is deliberately omitted &mdash; this page is public.</div>
+    </div>
+  </div>
+
+  <!-- ── What the gateway sees ──────────────────────────────────────────── -->
+  <div class="m-split" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); border-bottom: 2px solid var(--color-divider);">
+    <div style="padding: 40px 32px; border-right: 1px solid var(--color-divider);">
+      <h3 style="font-size: 25px; margin: 0 0 8px;">What the gateway sees</h3>
+      <p style="font-size: 14px; line-height: 1.55; margin: 0 0 16px; color: color-mix(in srgb, var(--color-text) 68%, transparent); max-width: 50ch;">Everything on the model connection: the system prompt, the visitor's question, the model's answer, and the <code>tool_use</code> blocks Claude emits as it decides what to call. That is the surface DLP and model policy apply to.</p>
+      <div style="display: flex; flex-direction: column; border-top: 1px solid var(--color-divider);">
+        <div class="m-source-row"><span class="m-label" style="letter-spacing: 0.1em;">Upstream</span><code style="text-align: right;">/v1/messages</code></div>
+        <div class="m-source-row"><span class="m-label" style="letter-spacing: 0.1em;">Transport</span><code style="text-align: right;">SSE, unbuffered</code></div>
+      </div>
+    </div>
+    <div style="padding: 40px 32px;">
+      <h3 style="font-size: 25px; margin: 0 0 8px;">What it doesn't</h3>
+      <p style="font-size: 14px; line-height: 1.55; margin: 0 0 16px; color: color-mix(in srgb, var(--color-text) 68%, transparent); max-width: 50ch;">The tool calls themselves. Anthropic's MCP connector opens its own connection to the public <code>/mcp</code> URL, so arguments and results travel Anthropic &rarr; Cloudflare &rarr; tunnel &rarr; origin and never touch the gateway. The origin's reads of Metra's feeds are outside it too.</p>
+      <div style="display: flex; flex-direction: column; border-top: 1px solid var(--color-divider);">
+        <div class="m-source-row"><span class="m-label" style="letter-spacing: 0.1em;">Callback</span><code style="text-align: right;">/mcp</code></div>
+        <div class="m-source-row"><span class="m-label" style="letter-spacing: 0.1em;">Feed egress</span><code style="text-align: right;">direct</code></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Poster close ───────────────────────────────────────────────────── -->
+  <div class="m-poster">
+    <div style="font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.85; margin-bottom: 18px;">Five systems. One answer.</div>
+    <div class="m-poster-statement" style="word-break: normal;">The answer goes out through the gateway.<br>The tools come back in the front door.</div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 28px;">
+      <a href="/copilot" class="btn m-btn-lg" style="background: var(--color-bg); color: var(--color-text);">Try it</a>
+      <a href="/stats" class="btn m-btn-lg" style="border-color: color-mix(in srgb, #f3f2f2 60%, transparent); color: var(--color-bg);">See the traffic</a>
+    </div>
+  </div>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <div class="m-foot">
+    <span>Metra MCP Server</span>
+    <span>&middot;</span>
+    <a href="/">Docs</a>
+    <span>&middot;</span>
+    <a href="/stats">Stats</a>
+    <span>&middot;</span>
+    <a href="https://modelcontextprotocol.io">Model Context Protocol</a>
+    <span style="margin-left: auto; letter-spacing: 0.1em; text-transform: uppercase;">Unofficial &middot; not affiliated with Metra</span>
+  </div>
+
+</body>
+</html>

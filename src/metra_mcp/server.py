@@ -1125,6 +1125,7 @@ def main():
         _copilot_html = _web_dir / "index.html"
 
         _stats_html = _web_dir / "stats.html"
+        _topo_html = _web_dir / "topo.html"
 
         # no-cache so UI/API changes take effect on the next page load instead
         # of stale JS hitting a newer API contract.
@@ -1191,6 +1192,10 @@ def main():
         async def handle_stats_page(request):
             stats.record_dashboard_event("page_view", {"page": "stats"})
             return _html_page(_stats_html)
+
+        async def handle_topo(request):
+            stats.record_dashboard_event("page_view", {"page": "topo"})
+            return _html_page(_topo_html)
 
         async def handle_health(request):
             """Liveness + basic readiness for reverse proxies / monitoring."""
@@ -1472,6 +1477,7 @@ def main():
         routes.append(Route("/", endpoint=handle_docs))
         routes.append(Route("/copilot", endpoint=handle_copilot))
         routes.append(Route("/stats", endpoint=handle_stats_page))
+        routes.append(Route("/topo", endpoint=handle_topo))
         routes.append(Route("/health", endpoint=handle_health))
         routes.append(Route("/api/stats/{kind}", endpoint=handle_stats_api))
         routes.append(Route("/favicon.ico", endpoint=handle_favicon_ico))
