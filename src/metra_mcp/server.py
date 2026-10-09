@@ -105,12 +105,13 @@ def _clamp_int(val: Any, *, default: int, lo: int, hi: int) -> int:
 # it must not be an open, unmetered relay. We cap request size, pin the model
 # server-side to an allowlist, and rate-limit per client IP.
 _CHAT_MODEL_ALLOWLIST = {
+    "claude-sonnet-5-5",
     "claude-sonnet-5",
     "claude-sonnet-4-5",
     "claude-haiku-4-5",
     "claude-haiku-4-5-20251001",
 }
-_CHAT_DEFAULT_MODEL = os.environ.get("METRA_CHAT_MODEL", "claude-sonnet-5")
+_CHAT_DEFAULT_MODEL = os.environ.get("METRA_CHAT_MODEL", "claude-sonnet-5-5")
 if _CHAT_DEFAULT_MODEL not in _CHAT_MODEL_ALLOWLIST:
     _CHAT_MODEL_ALLOWLIST.add(_CHAT_DEFAULT_MODEL)
 _CHAT_MAX_TOKENS_CAP = 4096
