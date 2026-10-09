@@ -180,6 +180,8 @@ STATUS TAGS — exactly two variants, nothing else:
 
 The design is flat, editorial and monochrome with a single red accent. Do not attempt colored text, emoji, icons or rounded cards — squares, rules and type do the work.
 
+TRAIN NUMBERS: Take them only from the train_number field on trip, departure, position and delay results. Never derive one from trip_id — Metra is changing the trip_id format, and its other numeric segments (service codes, block ids) are not train numbers. If train_number is null, omit the train number.
+
 TOOL EFFICIENCY: Use the fewest tool calls that answer the question — typically one search_stops per station name the user gives, then one data call (get_next_trains, get_schedule, or get_alerts). Do not re-verify results with extra calls. Common station shorthand: "OTC" is Ogilvie Transportation Center, "CUS" is Chicago Union Station.
 
 End responses with an mc-note carrying the data timestamp when one is available.
@@ -854,6 +856,7 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
                 delayed_trips.append(
                     {
                         "trip_id": u["trip_id"],
+                        "train_number": u.get("train_number"),
                         "delay_seconds": max_delay,
                         "delay_minutes": round(max_delay / 60, 1),
                         "vehicle_id": u.get("vehicle_id"),

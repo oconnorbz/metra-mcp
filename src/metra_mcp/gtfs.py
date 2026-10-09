@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from .common import CHICAGO_TZ, get_ssl_context
+from .common import CHICAGO_TZ, get_ssl_context, train_number
 
 
 def _chicago_now() -> datetime:
@@ -447,6 +447,7 @@ class GTFSData:
                 results.append(
                     {
                         "trip_id": trip["trip_id"],
+                        "train_number": train_number(trip["trip_id"]),
                         "trip_headsign": trip.get("trip_headsign", ""),
                         "direction_id": trip.get("direction_id", ""),
                         "direction": _direction_label(trip.get("direction_id", "")),
@@ -458,6 +459,7 @@ class GTFSData:
                 results.append(
                     {
                         "trip_id": trip["trip_id"],
+                        "train_number": train_number(trip["trip_id"]),
                         "trip_headsign": trip.get("trip_headsign", ""),
                         "direction_id": trip.get("direction_id", ""),
                         "direction": _direction_label(trip.get("direction_id", "")),
@@ -536,6 +538,7 @@ class GTFSData:
             upcoming.append(
                 {
                     "trip_id": st["trip_id"],
+                    "train_number": train_number(st["trip_id"]),
                     "route_id": trip["route_id"],
                     "trip_headsign": trip.get("trip_headsign", ""),
                     "direction_id": trip.get("direction_id", ""),

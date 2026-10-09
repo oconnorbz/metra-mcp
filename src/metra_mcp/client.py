@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from google.transit import gtfs_realtime_pb2
 
-from .common import CHICAGO_TZ, get_ssl_context
+from .common import CHICAGO_TZ, get_ssl_context, train_number
 
 
 def _ts_to_chicago(unix_ts: int | None) -> str | None:
@@ -124,11 +124,16 @@ class MetraRealtimeClient:
             trip_route = vp.trip.route_id if vp.HasField("trip") else ""
             if route_id and trip_route != route_id:
                 continue
+            label = vp.vehicle.label if vp.HasField("vehicle") else ""
+            vp_trip = vp.trip.trip_id if vp.HasField("trip") else ""
             pos = {
                 "vehicle_id": vp.vehicle.id if vp.HasField("vehicle") else entity.id,
-                "label": vp.vehicle.label if vp.HasField("vehicle") else "",
+                "label": label,
+                # The vehicle label carries the train number on this feed;
+                # fall back to the trip_id when it's absent or non-numeric.
+                "train_number": label if label.isdigit() else train_number(vp_trip),
                 "route_id": trip_route,
-                "trip_id": vp.trip.trip_id if vp.HasField("trip") else "",
+                "trip_id": vp_trip,
                 "latitude": vp.position.latitude,
                 "longitude": vp.position.longitude,
                 # HasField, not truthiness: a bearing of 0 is due north and a
@@ -183,6 +188,7 @@ class MetraRealtimeClient:
             updates.append(
                 {
                     "trip_id": t_trip,
+                    "train_number": train_number(t_trip),
                     "route_id": t_route,
                     "direction_id": tu.trip.direction_id if tu.trip.direction_id else None,
                     "start_date": tu.trip.start_date or None,
@@ -206,10 +212,12 @@ class MetraRealtimeClient:
             alert = entity.alert
             informed = []
             for ie in alert.informed_entity:
+                ie_trip = ie.trip.trip_id if ie.HasField("trip") else None
                 informed.append(
                     {
                         "route_id": ie.route_id or None,
-                        "trip_id": ie.trip.trip_id if ie.HasField("trip") else None,
+                        "trip_id": ie_trip,
+                        "train_number": train_number(ie_trip),
                         "stop_id": ie.stop_id or None,
                     }
                 )
