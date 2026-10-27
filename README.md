@@ -75,7 +75,7 @@ When `--http` is set the server binds `0.0.0.0:8080` (override with
 `MCP_HOST` / `MCP_PORT`) and exposes:
 
 - `GET /` — documentation page
-- `GET /copilot` — chat UI (requires `ANTHROPIC_API_KEY`)
+- `GET /copilot` — chat UI (requires `ANTHROPIC_API_KEY`, or a gateway that injects it)
 - `GET /stats` — usage dashboard
 - `GET /topo` — topology diagram of the copilot request path. Public by
   default; presenting the stats token (`/topo?token=…` or an `x-stats-token`
@@ -120,8 +120,9 @@ METRA_ANTHROPIC_EXTRA_HEADERS="x-ns-aig-slug: claude, x-ns-aig-apikey: <jwt>"
 ```
 
 (Those two header names are Netskope AI Gateway's: the slug selects the route,
-`x-ns-aig-apikey` carries the tenant JWT. `ANTHROPIC_API_KEY` is still sent as
-`x-api-key` for the gateway to forward upstream.)
+`x-ns-aig-apikey` carries the tenant JWT. If `ANTHROPIC_API_KEY` is set it is
+sent as `x-api-key`; leave it unset when the gateway stores the Anthropic key
+and injects `x-api-key` itself, which keeps the key off this server.)
 
 The proxy then POSTs to `<base>/v1/messages` and merges those headers over its
 own (so a gateway can also supply an auth header). Two requirements the

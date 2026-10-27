@@ -1377,8 +1377,11 @@ def main():
             )
 
         async def handle_chat(request):
+            # A gateway (METRA_ANTHROPIC_BASE_URL) may hold the Anthropic key
+            # itself and inject x-api-key upstream; only direct-to-Anthropic
+            # needs the key here.
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-            if not api_key:
+            if not api_key and _CHAT_API_BASE == "https://api.anthropic.com":
                 return JSONResponse(
                     {"error": "ANTHROPIC_API_KEY not configured on server"},
                     status_code=500,
@@ -1488,10 +1491,11 @@ def main():
 
             headers = {
                 "Content-Type": "application/json",
-                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "anthropic-beta": "mcp-client-2025-04-04",
             }
+            if api_key:
+                headers["x-api-key"] = api_key
             # Gateway headers last so a deployment can override the defaults
             # above (an auth header, a different beta set) without a code change.
             headers.update(_CHAT_EXTRA_HEADERS)
