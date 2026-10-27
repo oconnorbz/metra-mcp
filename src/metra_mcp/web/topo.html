@@ -101,7 +101,7 @@
     <div class="d-wrap">
       <svg class="d-svg" viewBox="0 0 1280 660" role="img" aria-labelledby="topo-title topo-desc">
         <title id="topo-title">Metra MCP Copilot topology</title>
-        <desc id="topo-desc">A visitor's browser reaches Cloudflare, which forwards over a cloudflared tunnel to the metra-mcp origin. The origin's chat proxy posts to the Netskope AI Gateway, which forwards to the Anthropic API. Anthropic's MCP connector calls the public MCP endpoint back through Cloudflare and the tunnel, bypassing the gateway. The MCP server reads Metra's GTFS feeds directly outbound.</desc>
+        <desc id="topo-desc">A visitor's browser reaches Cloudflare, which forwards over a cloudflared tunnel to the metra-mcp origin. The origin's chat proxy posts to the Netskope AI Gateway without any Anthropic credential; the gateway vaults the Anthropic API key and inserts it as x-api-key when it forwards to the Anthropic API. Anthropic's MCP connector calls the public MCP endpoint back through Cloudflare and the tunnel, bypassing the gateway. The MCP server reads Metra's GTFS feeds directly outbound.</desc>
 
         <defs>
           <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -151,15 +151,16 @@
         <rect class="d-box" x="620" y="330" width="210" height="110"></rect>
         <text class="d-num" x="636" y="356">05</text>
         <text class="d-title" x="636" y="378">Netskope AI GW</text>
-        <text class="d-sub" x="636" y="400">ai-gw &middot; /v1/messages</text>
-        <text class="d-sub" x="636" y="418">slug + tenant JWT</text>
+        <text class="d-sub" x="636" y="398">ai-gw &middot; /v1/messages</text>
+        <text class="d-sub" x="636" y="414">slug + tenant JWT</text>
+        <text class="d-sub d-label-accent" x="636" y="430">vaults Anthropic key</text>
         <!--INTERNAL-SLOT svg-gateway-->
 
         <!-- 06 Anthropic -->
         <rect class="d-box" x="330" y="330" width="210" height="110"></rect>
         <text class="d-num" x="346" y="356">06</text>
         <text class="d-title" x="346" y="378">Anthropic API</text>
-        <text class="d-sub" x="346" y="400">claude-sonnet-5</text>
+        <text class="d-sub" x="346" y="400">claude-sonnet-5-5</text>
         <text class="d-sub" x="346" y="418">streaming + MCP</text>
 
         <!-- 07 Metra feeds -->
@@ -182,8 +183,10 @@
         <text class="d-label d-label-accent" x="1012" y="300">/api/chat</text>
         <text class="d-label d-label-accent" x="1012" y="316">PROXY</text>
         <text class="d-label d-label-accent" x="930" y="375" text-anchor="middle">POST /v1/messages</text>
+        <text class="d-label d-label-accent" x="930" y="403" text-anchor="middle">NO ANTHROPIC KEY</text>
         <path class="d-edge-accent" d="M 620 385 H 548" marker-end="url(#ah-a)"></path>
         <text class="d-label d-label-accent" x="584" y="375" text-anchor="middle">MODEL</text>
+        <text class="d-label d-label-accent" x="584" y="403" text-anchor="middle">+ API KEY</text>
 
         <!-- Tool callback: Anthropic -> public /mcp, around the gateway -->
         <path class="d-edge-accent d-dash" d="M 435 330 V 178" marker-end="url(#ah-a)"></path>
@@ -247,14 +250,14 @@
         <span class="t-step-num">04</span>
         <div style="min-width: 0;">
           <div class="t-step-name">metra-mcp origin</div>
-          <div class="t-step-desc">One Starlette process serves the three pages, the MCP endpoint and the <code>/api/chat</code> proxy. The proxy is the part that spends money, so it is fenced: per-IP and global daily request caps, a body-size and message-count limit, a model allowlist, and a server-side system prompt the client cannot touch.</div>
+          <div class="t-step-desc">One Starlette process serves the three pages, the MCP endpoint and the <code>/api/chat</code> proxy. The proxy is the part that spends money, so it is fenced: per-IP and global daily request caps, a body-size and message-count limit, a model allowlist, and a server-side system prompt the client cannot touch. It holds no Anthropic credential at all &mdash; that lives in the gateway.</div>
         </div>
       </div>
       <div class="t-step">
         <span class="t-step-num">05</span>
         <div style="min-width: 0;">
           <div class="t-step-name">Netskope AI Gateway</div>
-          <div class="t-step-desc">Instead of <code>api.anthropic.com</code>, the proxy posts to the gateway's <code>/v1/messages</code> with a routing slug and a tenant JWT; the Anthropic key rides along in <code>x-api-key</code> for the gateway to forward upstream. It has to pass SSE through unbuffered &mdash; a gateway that holds the response would trip Cloudflare's first-byte timeout on tool-heavy questions.</div>
+          <div class="t-step-desc">Instead of <code>api.anthropic.com</code>, the proxy posts to the gateway's <code>/v1/messages</code> with a routing slug and a tenant JWT, and no Anthropic key. The gateway vaults the Anthropic API key and inserts it as <code>x-api-key</code> on the way upstream, so the credential that spends money never sits on the origin and can be rotated in one place. It has to pass SSE through unbuffered &mdash; a gateway that holds the response would trip Cloudflare's first-byte timeout on tool-heavy questions.</div>
         </div>
       </div>
       <div class="t-step">
@@ -301,7 +304,7 @@
           <tr><td>cloudflared</td><td>Docker host, lab network</td><td>Outbound-only tunnel to the edge; the origin's single trusted proxy</td></tr>
           <tr><td>Copilot web server</td><td>metra-mcp container, :8080</td><td>Serves <code>/</code>, <code>/copilot</code>, <code>/stats</code>, <code>/topo</code> and the <code>/api/chat</code> proxy</td></tr>
           <tr><td>Metra MCP server</td><td>Same process, <code>/mcp</code></td><td>Ten GTFS tools over streamable HTTP, with a Host allowlist</td></tr>
-          <tr><td>Netskope AI Gateway</td><td>Lab VM, <code>ai-gw</code></td><td>Inline inspection of the Anthropic Messages traffic; slug routing, tenant auth</td></tr>
+          <tr><td>Netskope AI Gateway</td><td>Lab VM, <code>ai-gw</code></td><td>Inline inspection of the Anthropic Messages traffic; slug routing, tenant auth; vaults the Anthropic API key and injects <code>x-api-key</code> upstream</td></tr>
           <tr><td>Anthropic API</td><td><code>api.anthropic.com</code></td><td>Runs the model, drives the MCP connector callbacks</td></tr>
           <tr><td>Metra GTFS feeds</td><td><code>metrarr.com</code> / <code>metrarail.com</code></td><td>Realtime vehicle, trip and alert feeds; daily static schedule</td></tr>
         </tbody>
@@ -321,6 +324,7 @@
       <div style="display: flex; flex-direction: column; border-top: 1px solid var(--color-divider);">
         <div class="m-source-row"><span class="m-label" style="letter-spacing: 0.1em;">Upstream</span><code style="text-align: right;">/v1/messages</code></div>
         <div class="m-source-row"><span class="m-label" style="letter-spacing: 0.1em;">Transport</span><code style="text-align: right;">SSE, unbuffered</code></div>
+        <div class="m-source-row"><span class="m-label" style="letter-spacing: 0.1em;">Anthropic key</span><code style="text-align: right;">vaulted, injected as x-api-key</code></div>
       </div>
     </div>
     <div style="padding: 40px 32px;">
