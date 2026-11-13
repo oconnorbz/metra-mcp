@@ -1021,6 +1021,28 @@ def main():
             b"object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
         )
 
+        # Cloudflare stamps every Worker subrequest with CF-Worker: <zone of
+        # the Worker's owner>, and the Worker can't remove it. Log it (plus
+        # the caller's UA/IP) once per (zone, UA) per hour so third-party
+        # Workers polling /mcp can be identified without flooding the journal.
+        _cf_worker_seen: dict[tuple[str, str], float] = {}
+        _CF_WORKER_LOG_INTERVAL = 3600.0
+
+        def _log_cf_worker(hdrs: dict, ip: str, path: str) -> None:
+            zone = hdrs.get("cf-worker")
+            if not zone:
+                return
+            ua = hdrs.get("user-agent", "")
+            key = (zone, ua)
+            now = time.monotonic()
+            if now - _cf_worker_seen.get(key, -_CF_WORKER_LOG_INTERVAL) < _CF_WORKER_LOG_INTERVAL:
+                return
+            _cf_worker_seen[key] = now
+            logger.warning(
+                "cf-worker request: zone=%r ua=%r ip=%s path=%s cf-ray=%s",
+                zone, ua, ip, path, hdrs.get("cf-ray", ""),
+            )
+
         class RequestCtxMiddleware:
             """Per-request plumbing: client IP resolution for stats, Host
             allowlisting on the MCP endpoints, and security headers."""
@@ -1034,11 +1056,13 @@ def main():
                     return
                 hdrs = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
                 path = scope.get("path", "")
+                client_ip = _ip_from_scope(scope)
                 stats.set_ctx(stats.RequestCtx(
-                    ip=_ip_from_scope(scope),
+                    ip=client_ip,
                     user_agent=hdrs.get("user-agent", ""),
                     path=path,
                 ))
+                _log_cf_worker(hdrs, client_ip, path)
 
                 if allowed_hosts and path.startswith(_MCP_PATHS):
                     if not _host_allowed(hdrs.get("host", "")):
