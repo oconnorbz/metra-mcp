@@ -144,6 +144,78 @@ def test_genuinely_late_train_is_not_flagged():
     assert [s["arrival_delay"] for s in out] == [3600, 3600]
 
 
+def _raw(seq, stop_id, epoch):
+    return {"stop_sequence": seq, "stop_id": stop_id, "departure": None,
+            "arrival": {"time": epoch, "delay": None}}
+
+
+def test_smaller_terminal_inflation_is_flagged():
+    """Live 2026-11-17: BNSF 1225, Route 59 on time, Aurora 11 min late."""
+    day = date(2026, 11, 17)
+    static = [
+        {"stop_id": "NAPERVILLE", "stop_sequence": "25", "arrival_time": "11:35:00"},
+        {"stop_id": "ROUTE59", "stop_sequence": "26", "arrival_time": "11:39:00"},
+        {"stop_id": "AURORA", "stop_sequence": "28", "arrival_time": "11:51:00"},
+    ]
+    raw = [
+        _raw(25, "NAPERVILLE", scheduled_epoch(day, "11:36:00")),
+        _raw(26, "ROUTE59", scheduled_epoch(day, "11:40:19")),
+        _raw(28, "AURORA", scheduled_epoch(day, "12:02:25")),
+    ]
+    out = resolve_stop_updates(raw, static, day)
+    assert [s["suspect"] for s in out] == [False, False, True]
+    aurora = out[-1]
+    assert aurora["prediction_source"] == "derived"
+    assert aurora["arrival_time"] == "2026-11-17 11:52:19 CST"  # Route 59 + scheduled 12 min
+    assert aurora["arrival_delay"] == 79
+    assert aurora["feed_arrival_time"] == "2026-11-17 12:02:25 CST"
+
+
+def test_same_jump_mid_trip_is_not_flagged():
+    """The tight test is for the last stop only; mid-trip a train can lose 11 min."""
+    day = date(2026, 11, 17)
+    static = [
+        {"stop_id": "ROUTE59", "stop_sequence": "26", "arrival_time": "11:39:00"},
+        {"stop_id": "AURORA", "stop_sequence": "28", "arrival_time": "11:51:00"},
+        {"stop_id": "BEYOND", "stop_sequence": "29", "arrival_time": "11:59:00"},
+    ]
+    raw = [
+        _raw(26, "ROUTE59", scheduled_epoch(day, "11:40:19")),
+        _raw(28, "AURORA", scheduled_epoch(day, "12:02:25")),
+        _raw(29, "BEYOND", scheduled_epoch(day, "12:10:25")),
+    ]
+    out = resolve_stop_updates(raw, static, day)
+    assert [s["suspect"] for s in out] == [False, False, False]
+
+
+def test_terminal_padding_recovery_and_small_slip_are_not_flagged():
+    day = date(2026, 11, 17)
+    static = [
+        {"stop_id": "HALSTED", "stop_sequence": "27", "arrival_time": "11:11:00"},
+        {"stop_id": "CUS", "stop_sequence": "28", "arrival_time": "11:20:00"},
+    ]
+    # Live BNSF 1254: 9 min late at Halsted, under 3 at CUS (padding).
+    early = [_raw(27, "HALSTED", scheduled_epoch(day, "11:20:11")),
+             _raw(28, "CUS", scheduled_epoch(day, "11:22:50"))]
+    assert [s["suspect"] for s in resolve_stop_updates(early, static, day)] == [False, False]
+    # Losing 4 more minutes into the terminal is believable.
+    slip = [_raw(27, "HALSTED", scheduled_epoch(day, "11:12:00")),
+            _raw(28, "CUS", scheduled_epoch(day, "11:25:00"))]
+    assert [s["suspect"] for s in resolve_stop_updates(slip, static, day)] == [False, False]
+
+
+def test_terminal_as_next_stop_is_trusted():
+    """With no earlier stop left to compare, the feed's terminal time stands."""
+    day = date(2026, 11, 17)
+    static = [
+        {"stop_id": "ROUTE59", "stop_sequence": "26", "arrival_time": "10:39:00"},
+        {"stop_id": "AURORA", "stop_sequence": "28", "arrival_time": "10:51:00"},
+    ]
+    out = resolve_stop_updates([_raw(28, "AURORA", scheduled_epoch(day, "10:55:12"))], static, day)
+    assert out[0]["suspect"] is False
+    assert out[0]["arrival_delay"] == 252
+
+
 # --- 2. DST boundaries -------------------------------------------------------
 
 # (service date, GTFS time) -> expected wall clock and UTC offset in hours.

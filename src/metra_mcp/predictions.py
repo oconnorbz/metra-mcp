@@ -13,7 +13,9 @@ So every stop_time_update is compared with the static schedule here:
   there is no schedule to compare against, never a made-up 0;
 * a prediction that is far off schedule *and* inconsistent with the stop
   before it is flagged ``suspect`` and replaced by the previous stop's
-  prediction plus the scheduled running time.
+  prediction plus the scheduled running time;
+* the trip's last stop is held to a tighter test, because the feed also
+  inflates it by smaller amounts (see TERMINAL_JUMP_SEC).
 
 All time math is done in epoch seconds. A service day is anchored at "noon
 minus 12h" in America/Chicago, as the GTFS spec requires, so DST-change days
@@ -35,6 +37,13 @@ SUSPECT_DEVIATION_SEC = 45 * 60
 # i.e. the predicted running time from the previous stop is this far from the
 # scheduled running time. A genuinely late train fails only the first test.
 SUSPECT_JUMP_SEC = 30 * 60
+# The trip's last stop gets a tighter test. Its feed prediction is routinely
+# inflated by 6-25 minutes while the stop is still several stops away (seen at
+# Waukegan and Aurora, constant per trip, gone once it is the next stop), so
+# there a deviation that grows by this much over the previous stop is enough.
+# Only growth counts: terminals carry schedule padding, so a train making up
+# several minutes on the last segment is normal.
+TERMINAL_JUMP_SEC = 5 * 60
 # Feed delay vs. our computed delay: disagreement worth a log line.
 DELAY_MISMATCH_SEC = 120
 
@@ -139,18 +148,20 @@ def _resolve_event(
     sched: int | None,
     prev: tuple[int, int] | None,
     skipped: bool,
+    terminal: bool = False,
 ) -> tuple[int | None, str | None, bool]:
     """One arrival or departure -> (predicted epoch, source, suspect).
 
-    ``prev`` is the previous stop's (predicted, scheduled) epochs.
+    ``prev`` is the previous stop's (predicted, scheduled) epochs;
+    ``terminal`` marks the last stop of the trip in the static schedule.
     """
     if feed_time:
         if sched is not None and prev is not None:
             deviation = feed_time - sched
             prev_deviation = prev[0] - prev[1]
-            if (
-                abs(deviation) > SUSPECT_DEVIATION_SEC
-                and abs(deviation - prev_deviation) > SUSPECT_JUMP_SEC
+            jump = deviation - prev_deviation
+            if (abs(deviation) > SUSPECT_DEVIATION_SEC and abs(jump) > SUSPECT_JUMP_SEC) or (
+                terminal and jump > TERMINAL_JUMP_SEC
             ):
                 # Previous prediction + scheduled running time.
                 return sched + prev_deviation, "derived", True
@@ -190,6 +201,8 @@ def resolve_stop_updates(
         if static_rows and service_date is not None:
             row = _match_static(static_rows, seq, stop_id)
 
+        terminal = row is not None and row is static_rows[-1]
+
         su: dict[str, Any] = {"stop_sequence": seq, "stop_id": stop_id}
         sources: list[str | None] = []
         suspect = False
@@ -205,7 +218,7 @@ def resolve_stop_updates(
             sched = scheduled_epoch(service_date, row.get(f"{kind}_time")) if row else None
 
             predicted, source, bad = _resolve_event(
-                feed_time, feed_delay, sched, stop_prev, rel == "SKIPPED"
+                feed_time, feed_delay, sched, stop_prev, rel == "SKIPPED", terminal
             )
             if source == "scheduled" or predicted is None:
                 # Nothing realtime to base a delay on.

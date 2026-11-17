@@ -232,8 +232,11 @@ on it.
 - `direction_id` / `direction` come from `trips.txt` when the feed omits them
   (Metra: `1` = inbound, `0` = outbound).
 
-Smaller inflations of the last stop (10–30 minutes) also occur and are passed
-through unflagged.
+- The trip's last stop is held to a tighter test, because the feed also
+  inflates it by smaller amounts (6–25 minutes at Waukegan and Aurora, constant
+  per trip, gone once it is the next stop): there, a delay that grows by more
+  than 5 minutes over the previous stop is enough to mark it suspect. A train
+  making up time into a padded terminal is not flagged.
 
 Scheduled times are anchored at "noon minus 12h" in `America/Chicago` on the
 service date, per the GTFS spec, so DST-change days and `24:xx:xx` times work.
