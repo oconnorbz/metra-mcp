@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from .common import CHICAGO_TZ, get_ssl_context, train_number
+from .predictions import parse_gtfs_time
 
 
 def _chicago_now() -> datetime:
@@ -99,6 +100,9 @@ class _Snapshot:
     stop_times_by_stop: dict[str, list[dict[str, str]]] = field(default_factory=dict)
     trips_by_route: dict[str, list[dict[str, str]]] = field(default_factory=dict)
     trip_by_id: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Shortest scheduled running time (s) between two adjacent stops, in
+    # either direction, over every trip. Keyed by the unordered stop pair.
+    fastest_run: dict[frozenset[str], int] = field(default_factory=dict)
 
 
 _EMPTY = _Snapshot()
@@ -296,6 +300,18 @@ class GTFSData:
         for sts in by_trip.values():
             sts.sort(key=lambda x: int(x.get("stop_sequence", "0")))
 
+        fastest_run: dict[frozenset[str], int] = {}
+        for sts in by_trip.values():
+            for a, b in zip(sts, sts[1:]):
+                left = parse_gtfs_time(a.get("departure_time") or a.get("arrival_time"))
+                arrived = parse_gtfs_time(b.get("arrival_time") or b.get("departure_time"))
+                if left is None or arrived is None or arrived <= left:
+                    continue
+                pair = frozenset((a.get("stop_id", ""), b.get("stop_id", "")))
+                run = arrived - left
+                if run < fastest_run.get(pair, run + 1):
+                    fastest_run[pair] = run
+
         by_route: dict[str, list[dict[str, str]]] = defaultdict(list)
         trip_by_id: dict[str, dict[str, str]] = {}
         for t in trips:
@@ -318,6 +334,7 @@ class GTFSData:
             stop_times_by_stop=dict(by_stop),
             trips_by_route=dict(by_route),
             trip_by_id=trip_by_id,
+            fastest_run=fastest_run,
         )
 
     @staticmethod
@@ -436,6 +453,15 @@ class GTFSData:
             if t.get("service_id") in services and train_number(t["trip_id"]) == number
         ]
         return matches[0] if len(matches) == 1 else None
+
+    def fastest_run(self, from_stop_id: str, to_stop_id: str) -> int | None:
+        """Shortest scheduled running time in seconds between two stops that
+        are adjacent on some trip (either direction), or None.
+
+        Schedules into downtown terminals are padded, so the reverse direction
+        usually sets this: a floor on how quickly the segment can be covered.
+        """
+        return self._snap.fastest_run.get(frozenset((from_stop_id, to_stop_id)))
 
     def get_trip_stop_times(self, trip_id: str) -> list[dict[str, str]]:
         """Static stop_times rows for a trip, ordered by stop_sequence."""

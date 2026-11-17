@@ -15,7 +15,9 @@ So every stop_time_update is compared with the static schedule here:
   before it is flagged ``suspect`` and replaced by the previous stop's
   prediction plus the scheduled running time;
 * the trip's last stop is held to a tighter test, because the feed also
-  inflates it by smaller amounts (see TERMINAL_JUMP_SEC).
+  inflates it by smaller amounts (see TERMINAL_JUMP_SEC) and sometimes has
+  the train covering the last segment impossibly fast (see
+  TERMINAL_MIN_RUN_FRACTION).
 
 All time math is done in epoch seconds. A service day is anchored at "noon
 minus 12h" in America/Chicago, as the GTFS spec requires, so DST-change days
@@ -24,6 +26,7 @@ and times past 24:00:00 come out right.
 
 import logging
 import time as _time
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -44,6 +47,14 @@ SUSPECT_JUMP_SEC = 30 * 60
 # Only growth counts: terminals carry schedule padding, so a train making up
 # several minutes on the last segment is normal.
 TERMINAL_JUMP_SEC = 5 * 60
+# The opposite error also happens at the last stop: the feed pins the terminal
+# near its scheduled time while the train is running late, leaving almost no
+# time to get there (2026-11-17, UP-N 334: Clybourn 12:47:44, OTC 12:51:21;
+# no train is scheduled over that segment in under 8 minutes). Padding lets a
+# late train make up time, but not beat the fastest scheduled run for the
+# segment by more than a third. Such a prediction is replaced by the previous
+# stop's prediction plus that fastest run, the earliest believable arrival.
+TERMINAL_MIN_RUN_FRACTION = 2 / 3
 # Feed delay vs. our computed delay: disagreement worth a log line.
 DELAY_MISMATCH_SEC = 120
 
@@ -149,11 +160,14 @@ def _resolve_event(
     prev: tuple[int, int] | None,
     skipped: bool,
     terminal: bool = False,
+    fastest_run: int | None = None,
 ) -> tuple[int | None, str | None, bool]:
     """One arrival or departure -> (predicted epoch, source, suspect).
 
     ``prev`` is the previous stop's (predicted, scheduled) epochs;
-    ``terminal`` marks the last stop of the trip in the static schedule.
+    ``terminal`` marks the last stop of the trip in the static schedule and
+    ``fastest_run`` is the shortest scheduled running time from the previous
+    stop to this one on any trip, when known.
     """
     if feed_time:
         if sched is not None and prev is not None:
@@ -165,6 +179,12 @@ def _resolve_event(
             ):
                 # Previous prediction + scheduled running time.
                 return sched + prev_deviation, "derived", True
+            if (
+                terminal
+                and fastest_run
+                and feed_time - prev[0] < fastest_run * TERMINAL_MIN_RUN_FRACTION
+            ):
+                return prev[0] + fastest_run, "derived", True
         return feed_time, "feed_time", False
     if feed_delay is not None and sched is not None:
         return sched + feed_delay, "feed_delay", False
@@ -178,12 +198,17 @@ def resolve_stop_updates(
     static_rows: list[dict[str, str]] | None,
     service_date: date | None,
     trip_id: str = "",
+    fastest_run: Callable[[str, str], int | None] | None = None,
 ) -> list[dict[str, Any]]:
     """Turn raw stop_time_updates into the tool's stop_time_updates.
 
     Each raw stop is ``{"stop_sequence", "stop_id", "schedule_relationship",
     "arrival": {"time", "delay"} | None, "departure": {...} | None}`` with
     ``time``/``delay`` set to None when the feed omitted the field.
+
+    ``fastest_run(from_stop_id, to_stop_id)`` gives the shortest scheduled
+    running time between two adjacent stops (GTFSData.fastest_run); without
+    it the too-fast test at the last stop is skipped.
 
     Every stop, the terminal included, goes through the same path. Without
     static data (``static_rows``/``service_date`` None) the feed's own values
@@ -192,6 +217,7 @@ def resolve_stop_updates(
     out: list[dict[str, Any]] = []
     mismatches: list[str] = []
     prev: tuple[int, int] | None = None
+    prev_stop_id = ""
 
     for raw in raw_stops:
         seq = raw.get("stop_sequence")
@@ -202,6 +228,9 @@ def resolve_stop_updates(
             row = _match_static(static_rows, seq, stop_id)
 
         terminal = row is not None and row is static_rows[-1]
+        floor = None
+        if terminal and prev is not None and fastest_run is not None:
+            floor = fastest_run(prev_stop_id, stop_id)
 
         su: dict[str, Any] = {"stop_sequence": seq, "stop_id": stop_id}
         sources: list[str | None] = []
@@ -218,7 +247,7 @@ def resolve_stop_updates(
             sched = scheduled_epoch(service_date, row.get(f"{kind}_time")) if row else None
 
             predicted, source, bad = _resolve_event(
-                feed_time, feed_delay, sched, stop_prev, rel == "SKIPPED", terminal
+                feed_time, feed_delay, sched, stop_prev, rel == "SKIPPED", terminal, floor
             )
             if source == "scheduled" or predicted is None:
                 # Nothing realtime to base a delay on.
@@ -250,6 +279,7 @@ def resolve_stop_updates(
 
         if next_prev is not None:
             prev = next_prev
+            prev_stop_id = stop_id
         su["prediction_source"] = next((s for s in sources if s), None)
         su["suspect"] = suspect
         su["schedule_relationship"] = rel

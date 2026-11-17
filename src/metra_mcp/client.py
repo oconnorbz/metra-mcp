@@ -294,7 +294,11 @@ def parse_trip_updates(
                 "vehicle_id": tu.vehicle.id if tu.HasField("vehicle") else None,
                 "timestamp": format_chicago(tu.timestamp),
                 "stop_time_updates": resolve_stop_updates(
-                    raw_stops, static_rows, service_date, t_trip
+                    raw_stops,
+                    static_rows,
+                    service_date,
+                    t_trip,
+                    gtfs.fastest_run if gtfs is not None else None,
                 ),
             }
         )

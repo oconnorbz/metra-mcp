@@ -235,8 +235,13 @@ on it.
 - The trip's last stop is held to a tighter test, because the feed also
   inflates it by smaller amounts (6–25 minutes at Waukegan and Aurora, constant
   per trip, gone once it is the next stop): there, a delay that grows by more
-  than 5 minutes over the previous stop is enough to mark it suspect. A train
-  making up time into a padded terminal is not flagged.
+  than 5 minutes over the previous stop is enough to mark it suspect.
+- The last stop is also suspect when the feed has the train reaching it
+  impossibly fast: in under two thirds of the fastest running time any trip is
+  scheduled over that segment, in either direction (e.g. Clybourn to OTC in
+  3.6 minutes against a fastest scheduled 8). It is replaced by the previous
+  stop's prediction plus that fastest run. A train merely making up time into
+  a padded terminal is not flagged.
 
 Scheduled times are anchored at "noon minus 12h" in `America/Chicago` on the
 service date, per the GTFS spec, so DST-change days and `24:xx:xx` times work.

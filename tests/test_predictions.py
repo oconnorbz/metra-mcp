@@ -204,6 +204,98 @@ def test_terminal_padding_recovery_and_small_slip_are_not_flagged():
     assert [s["suspect"] for s in resolve_stop_updates(slip, static, day)] == [False, False]
 
 
+def _otc_static():
+    return [
+        {"stop_id": "RAVENSWOOD", "stop_sequence": "28", "arrival_time": "12:32:00"},
+        {"stop_id": "CLYBOURN", "stop_sequence": "29", "arrival_time": "12:39:00"},
+        {"stop_id": "OTC", "stop_sequence": "30", "arrival_time": "12:50:00"},
+    ]
+
+
+def _fastest(pairs):
+    table = {frozenset(k): v for k, v in pairs.items()}
+    return lambda a, b: table.get(frozenset((a, b)))
+
+
+def test_too_fast_terminal_arrival_is_flagged():
+    """Live 2026-11-17, UP-N 334: 9 min late at Clybourn, OTC 3.6 min later."""
+    day = date(2026, 11, 17)
+    raw = [
+        _raw(28, "RAVENSWOOD", scheduled_epoch(day, "12:40:56")),
+        _raw(29, "CLYBOURN", scheduled_epoch(day, "12:47:44")),
+        _raw(30, "OTC", scheduled_epoch(day, "12:51:21")),
+    ]
+    fastest = _fastest({("CLYBOURN", "OTC"): 480})
+    out = resolve_stop_updates(raw, _otc_static(), day, fastest_run=fastest)
+    assert [s["suspect"] for s in out] == [False, False, True]
+    otc = out[-1]
+    assert otc["prediction_source"] == "derived"
+    assert otc["arrival_time"] == "2026-11-17 12:55:44 CST"  # Clybourn + fastest 8 min
+    assert otc["arrival_delay"] == 344
+    assert otc["feed_arrival_time"] == "2026-11-17 12:51:21 CST"
+    # Without the schedule's fastest run there is nothing to judge it by.
+    plain = resolve_stop_updates(raw, _otc_static(), day)
+    assert plain[-1]["suspect"] is False
+
+
+def test_making_up_time_into_the_terminal_is_not_flagged():
+    """Live UP-N 330: Clybourn -> OTC in 9:02 against 11 scheduled, 8 fastest."""
+    day = date(2026, 11, 17)
+    raw = [
+        _raw(29, "CLYBOURN", scheduled_epoch(day, "12:41:41")),
+        _raw(30, "OTC", scheduled_epoch(day, "12:50:43")),
+    ]
+    fastest = _fastest({("CLYBOURN", "OTC"): 480})
+    out = resolve_stop_updates(raw, _otc_static(), day, fastest_run=fastest)
+    assert [s["suspect"] for s in out] == [False, False]
+    # Right at the limit (two thirds of the fastest run = 5:20) still passes.
+    edge = [_raw(29, "CLYBOURN", scheduled_epoch(day, "12:41:00")),
+            _raw(30, "OTC", scheduled_epoch(day, "12:46:20"))]
+    assert resolve_stop_updates(edge, _otc_static(), day, fastest_run=fastest)[-1]["suspect"] is False
+
+
+def test_too_fast_test_applies_to_the_last_stop_only():
+    day = date(2026, 11, 17)
+    raw = [
+        _raw(28, "RAVENSWOOD", scheduled_epoch(day, "12:40:00")),
+        _raw(29, "CLYBOURN", scheduled_epoch(day, "12:41:00")),
+        _raw(30, "OTC", scheduled_epoch(day, "12:50:00")),
+    ]
+    fastest = _fastest({("RAVENSWOOD", "CLYBOURN"): 360, ("CLYBOURN", "OTC"): 480})
+    out = resolve_stop_updates(raw, _otc_static(), day, fastest_run=fastest)
+    assert [s["suspect"] for s in out] == [False, False, False]
+
+
+def test_fastest_run_comes_from_either_direction(tmp_path):
+    trips = [
+        {"route_id": "UP-N", "service_id": "A", "trip_id": "IN", "direction_id": "1"},
+        {"route_id": "UP-N", "service_id": "A", "trip_id": "OUT", "direction_id": "0"},
+    ]
+    def row(trip, seq, stop, hms):
+        return {"trip_id": trip, "stop_sequence": str(seq), "stop_id": stop,
+                "arrival_time": hms, "departure_time": hms}
+    stop_times = [
+        row("IN", 29, "CLYBOURN", "12:39:00"), row("IN", 30, "OTC", "12:50:00"),
+        row("OUT", 1, "OTC", "11:32:00"), row("OUT", 2, "CLYBOURN", "11:40:00"),
+        row("OUT", 3, "RAVENSWOOD", "11:45:00"),
+    ]
+    gtfs = _make_gtfs(tmp_path, trips, stop_times)
+    assert gtfs.fastest_run("CLYBOURN", "OTC") == 480
+    assert gtfs.fastest_run("OTC", "CLYBOURN") == 480
+    assert gtfs.fastest_run("OTC", "RAVENSWOOD") is None  # not adjacent on any trip
+
+    day = date(2026, 11, 17)
+    feed = _make_feed([{"trip_id": "IN", "route_id": "UP-N", "start_date": "20261117",
+                        "stop_time_updates": [
+        {"stop_sequence": 29, "stop_id": "CLYBOURN",
+         "arrival": {"time": scheduled_epoch(day, "12:47:44")}},
+        {"stop_sequence": 30, "stop_id": "OTC",
+         "arrival": {"time": scheduled_epoch(day, "12:51:21")}}]}])
+    otc = parse_trip_updates(feed, gtfs=gtfs)[0]["stop_time_updates"][-1]
+    assert otc["suspect"] is True
+    assert otc["arrival_time"] == "2026-11-17 12:55:44 CST"
+
+
 def test_terminal_as_next_stop_is_trusted():
     """With no earlier stop left to compare, the feed's terminal time stands."""
     day = date(2026, 11, 17)
