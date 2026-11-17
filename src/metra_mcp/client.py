@@ -8,22 +8,19 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime
 from typing import Any
 
 import httpx
 from google.transit import gtfs_realtime_pb2
 
-from .common import CHICAGO_TZ, get_ssl_context, train_number
-
-
-def _ts_to_chicago(unix_ts: int | None) -> str | None:
-    """Convert a Unix timestamp to America/Chicago datetime string."""
-    if not unix_ts:
-        return None
-    dt = datetime.fromtimestamp(unix_ts, tz=CHICAGO_TZ)
-    return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
-
+from .common import get_ssl_context, train_number
+from .gtfs import GTFSData, _direction_label
+from .predictions import (
+    format_chicago,
+    infer_service_date,
+    parse_service_date,
+    resolve_stop_updates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -143,62 +140,29 @@ class MetraRealtimeClient:
                 "current_stop_sequence": vp.current_stop_sequence or None,
                 "stop_id": vp.stop_id or None,
                 "current_status": _vehicle_status(vp.current_status),
-                "timestamp": _ts_to_chicago(vp.timestamp),
+                "timestamp": format_chicago(vp.timestamp),
             }
             positions.append(pos)
         return positions
 
     async def get_trip_updates(
-        self, route_id: str | None = None, trip_id: str | None = None
+        self,
+        route_id: str | None = None,
+        trip_id: str | None = None,
+        gtfs: GTFSData | None = None,
     ) -> list[dict[str, Any]]:
         """Get real-time trip updates (arrival/departure predictions).
 
         Args:
             route_id: Optional route filter.
             trip_id: Optional specific trip filter.
+            gtfs: Loaded static schedule. With it, delays are computed against
+                the schedule, implausible feed predictions are flagged and
+                corrected, and direction is filled in from trips.txt. Without
+                it the feed's values are passed through as they are.
         """
         feed = await self._fetch_feed("tripupdates")
-        updates = []
-        for entity in feed.entity:
-            tu = entity.trip_update
-            t_route = tu.trip.route_id
-            t_trip = tu.trip.trip_id
-            if route_id and t_route != route_id:
-                continue
-            if trip_id and t_trip != trip_id:
-                continue
-            stop_updates = []
-            for stu in tu.stop_time_update:
-                su = {
-                    "stop_sequence": stu.stop_sequence,
-                    "stop_id": stu.stop_id,
-                }
-                if stu.HasField("arrival"):
-                    su["arrival_delay"] = stu.arrival.delay if stu.arrival.delay else 0
-                    su["arrival_time"] = _ts_to_chicago(stu.arrival.time)
-                if stu.HasField("departure"):
-                    su["departure_delay"] = (
-                        stu.departure.delay if stu.departure.delay else 0
-                    )
-                    su["departure_time"] = _ts_to_chicago(stu.departure.time)
-                su["schedule_relationship"] = _stop_schedule_rel(
-                    stu.schedule_relationship
-                )
-                stop_updates.append(su)
-            updates.append(
-                {
-                    "trip_id": t_trip,
-                    "train_number": train_number(t_trip),
-                    "route_id": t_route,
-                    "direction_id": tu.trip.direction_id if tu.trip.direction_id else None,
-                    "start_date": tu.trip.start_date or None,
-                    "start_time": tu.trip.start_time or None,
-                    "vehicle_id": tu.vehicle.id if tu.HasField("vehicle") else None,
-                    "timestamp": _ts_to_chicago(tu.timestamp),
-                    "stop_time_updates": stop_updates,
-                }
-            )
-        return updates
+        return parse_trip_updates(feed, route_id, trip_id, gtfs)
 
     async def get_alerts(self, route_id: str | None = None) -> list[dict[str, Any]]:
         """Get active service alerts.
@@ -229,7 +193,7 @@ class MetraRealtimeClient:
                     continue
             periods = []
             for ap in alert.active_period:
-                periods.append({"start": _ts_to_chicago(ap.start), "end": _ts_to_chicago(ap.end)})
+                periods.append({"start": format_chicago(ap.start), "end": format_chicago(ap.end)})
 
             alerts.append(
                 {
@@ -249,6 +213,106 @@ class MetraRealtimeClient:
         if self._client:
             await self._client.aclose()
             self._client = None
+
+
+def _stop_event(stu, kind: str) -> dict[str, int | None] | None:
+    """Raw arrival/departure of a StopTimeUpdate, keeping absent fields None.
+
+    HasField, not truthiness: a delay of 0 the feed actually sent is a
+    statement ("on time"); a delay it did not send is unknown.
+    """
+    if not stu.HasField(kind):
+        return None
+    event = getattr(stu, kind)
+    return {
+        "time": event.time if event.HasField("time") else None,
+        "delay": event.delay if event.HasField("delay") else None,
+    }
+
+
+def parse_trip_updates(
+    feed: gtfs_realtime_pb2.FeedMessage,
+    route_id: str | None = None,
+    trip_id: str | None = None,
+    gtfs: GTFSData | None = None,
+) -> list[dict[str, Any]]:
+    """Decode a TripUpdates feed into the tool's trip_updates list.
+
+    Pure (no I/O): see MetraRealtimeClient.get_trip_updates for the args.
+    """
+    if gtfs is not None and not gtfs.loaded:
+        gtfs = None
+    updates = []
+    for entity in feed.entity:
+        tu = entity.trip_update
+        t_route = tu.trip.route_id
+        t_trip = tu.trip.trip_id
+        if route_id and t_route != route_id:
+            continue
+        if trip_id and t_trip != trip_id:
+            continue
+
+        raw_stops = [
+            {
+                "stop_sequence": stu.stop_sequence if stu.HasField("stop_sequence") else None,
+                "stop_id": stu.stop_id,
+                "arrival": _stop_event(stu, "arrival"),
+                "departure": _stop_event(stu, "departure"),
+                "schedule_relationship": _stop_schedule_rel(stu.schedule_relationship),
+            }
+            for stu in tu.stop_time_update
+        ]
+
+        service_date = parse_service_date(tu.trip.start_date)
+        static_trip = None
+        static_rows: list[dict[str, str]] = []
+        if gtfs is not None:
+            static_trip = gtfs.find_trip(t_trip, t_route, service_date)
+            if static_trip is not None:
+                static_rows = gtfs.get_trip_stop_times(static_trip["trip_id"])
+            if service_date is None and static_rows:
+                service_date = _infer_trip_service_date(raw_stops, static_rows)
+
+        # The feed's direction_id when it sends one (0 is a real value:
+        # outbound), otherwise the static trip's.
+        if tu.trip.HasField("direction_id"):
+            direction_id: str | None = str(tu.trip.direction_id)
+        elif static_trip is not None and static_trip.get("direction_id"):
+            direction_id = static_trip["direction_id"]
+        else:
+            direction_id = None
+
+        updates.append(
+            {
+                "trip_id": t_trip,
+                "train_number": train_number(t_trip),
+                "route_id": t_route,
+                "direction_id": direction_id,
+                "direction": _direction_label(direction_id or "") or None,
+                "start_date": tu.trip.start_date or None,
+                "start_time": tu.trip.start_time or None,
+                "vehicle_id": tu.vehicle.id if tu.HasField("vehicle") else None,
+                "timestamp": format_chicago(tu.timestamp),
+                "stop_time_updates": resolve_stop_updates(
+                    raw_stops, static_rows, service_date, t_trip
+                ),
+            }
+        )
+    return updates
+
+
+def _infer_trip_service_date(raw_stops: list[dict[str, Any]], static_rows: list[dict[str, str]]):
+    """Service date of a trip with no start_date, from its first timed stop."""
+    by_stop = {row.get("stop_id"): row for row in reversed(static_rows)}
+    for raw in raw_stops:
+        row = by_stop.get(raw["stop_id"])
+        if row is None:
+            continue
+        for kind in ("arrival", "departure"):
+            event = raw.get(kind)
+            if event and event.get("time"):
+                return infer_service_date(event["time"], row.get(f"{kind}_time"))
+    return None
 
 
 def _vehicle_status(status: int) -> str:

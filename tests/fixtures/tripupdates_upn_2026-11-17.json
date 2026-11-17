@@ -1,0 +1,232 @@
+{
+ "_note": "Reconstructed from get_trip_updates tool output captured Tue 2026-11-17 ~09:01 CST (route UP-N, inbound), not a raw protobuf dump: the tool printed each feed epoch at 1 s resolution in America/Chicago, so the arrival times here are the feed's values. Whether the feed carried arrival.delay is unknown (the old server collapsed absent to 0), so delay is omitted. Only the last stops of each trip were recorded. 'static' holds the matching rows of the published schedule (10/22/26 edition).",
+ "header_timestamp": 1794927660,
+ "trip_updates": [
+  {
+   "trip_id": "UP-N_UN318_V3_AA",
+   "route_id": "UP-N",
+   "start_date": "20261117",
+   "stop_time_updates": [
+    {
+     "stop_sequence": 30,
+     "stop_id": "OTC",
+     "arrival": {
+      "time": 1794928293,
+      "local": "09:11:33 CST"
+     }
+    }
+   ]
+  },
+  {
+   "trip_id": "UP-N_UN320_V2_AA",
+   "route_id": "UP-N",
+   "start_date": "20261117",
+   "stop_time_updates": [
+    {
+     "stop_sequence": 28,
+     "stop_id": "RAVENSWOOD",
+     "arrival": {
+      "time": 1794928203,
+      "local": "09:10:03 CST"
+     }
+    },
+    {
+     "stop_sequence": 29,
+     "stop_id": "CLYBOURN",
+     "arrival": {
+      "time": 1794928596,
+      "local": "09:16:36 CST"
+     }
+    },
+    {
+     "stop_sequence": 30,
+     "stop_id": "OTC",
+     "arrival": {
+      "time": 1794932826,
+      "local": "10:27:06 CST"
+     }
+    }
+   ]
+  },
+  {
+   "trip_id": "UP-N_UN322_V2_AA",
+   "route_id": "UP-N",
+   "start_date": "20261117",
+   "stop_time_updates": [
+    {
+     "stop_sequence": 28,
+     "stop_id": "RAVENSWOOD",
+     "arrival": {
+      "time": 1794929059,
+      "local": "09:24:19 CST"
+     }
+    },
+    {
+     "stop_sequence": 29,
+     "stop_id": "CLYBOURN",
+     "arrival": {
+      "time": 1794929452,
+      "local": "09:30:52 CST"
+     }
+    },
+    {
+     "stop_sequence": 30,
+     "stop_id": "OTC",
+     "arrival": {
+      "time": 1794933682,
+      "local": "10:41:22 CST"
+     }
+    }
+   ]
+  },
+  {
+   "trip_id": "UP-N_UN324_V2_AA",
+   "route_id": "UP-N",
+   "start_date": "20261117",
+   "stop_time_updates": [
+    {
+     "stop_sequence": 28,
+     "stop_id": "RAVENSWOOD",
+     "arrival": {
+      "time": 1794929989,
+      "local": "09:39:49 CST"
+     }
+    },
+    {
+     "stop_sequence": 29,
+     "stop_id": "CLYBOURN",
+     "arrival": {
+      "time": 1794930382,
+      "local": "09:46:22 CST"
+     }
+    },
+    {
+     "stop_sequence": 30,
+     "stop_id": "OTC",
+     "arrival": {
+      "time": 1794934612,
+      "local": "10:56:52 CST"
+     }
+    }
+   ]
+  }
+ ],
+ "static": {
+  "trips": [
+   {
+    "route_id": "UP-N",
+    "service_id": "A1A",
+    "trip_id": "UP-N_UN318_V3_AA",
+    "trip_headsign": "Chicago OTC",
+    "direction_id": "1"
+   },
+   {
+    "route_id": "UP-N",
+    "service_id": "A1A",
+    "trip_id": "UP-N_UN320_V2_AA",
+    "trip_headsign": "Chicago OTC",
+    "direction_id": "1"
+   },
+   {
+    "route_id": "UP-N",
+    "service_id": "A1A",
+    "trip_id": "UP-N_UN322_V2_AA",
+    "trip_headsign": "Chicago OTC",
+    "direction_id": "1"
+   },
+   {
+    "route_id": "UP-N",
+    "service_id": "A1A",
+    "trip_id": "UP-N_UN324_V2_AA",
+    "trip_headsign": "Chicago OTC",
+    "direction_id": "1"
+   }
+  ],
+  "stop_times": [
+   {
+    "trip_id": "UP-N_UN318_V3_AA",
+    "arrival_time": "08:52:00",
+    "departure_time": "08:52:00",
+    "stop_id": "RAVENSWOOD",
+    "stop_sequence": "28"
+   },
+   {
+    "trip_id": "UP-N_UN318_V3_AA",
+    "arrival_time": "08:59:00",
+    "departure_time": "08:59:00",
+    "stop_id": "CLYBOURN",
+    "stop_sequence": "29"
+   },
+   {
+    "trip_id": "UP-N_UN318_V3_AA",
+    "arrival_time": "09:10:00",
+    "departure_time": "09:10:00",
+    "stop_id": "OTC",
+    "stop_sequence": "30"
+   },
+   {
+    "trip_id": "UP-N_UN320_V2_AA",
+    "arrival_time": "09:09:00",
+    "departure_time": "09:09:00",
+    "stop_id": "RAVENSWOOD",
+    "stop_sequence": "28"
+   },
+   {
+    "trip_id": "UP-N_UN320_V2_AA",
+    "arrival_time": "09:16:00",
+    "departure_time": "09:16:00",
+    "stop_id": "CLYBOURN",
+    "stop_sequence": "29"
+   },
+   {
+    "trip_id": "UP-N_UN320_V2_AA",
+    "arrival_time": "09:27:00",
+    "departure_time": "09:27:00",
+    "stop_id": "OTC",
+    "stop_sequence": "30"
+   },
+   {
+    "trip_id": "UP-N_UN322_V2_AA",
+    "arrival_time": "09:22:00",
+    "departure_time": "09:22:00",
+    "stop_id": "RAVENSWOOD",
+    "stop_sequence": "28"
+   },
+   {
+    "trip_id": "UP-N_UN322_V2_AA",
+    "arrival_time": "09:29:00",
+    "departure_time": "09:29:00",
+    "stop_id": "CLYBOURN",
+    "stop_sequence": "29"
+   },
+   {
+    "trip_id": "UP-N_UN322_V2_AA",
+    "arrival_time": "09:40:00",
+    "departure_time": "09:40:00",
+    "stop_id": "OTC",
+    "stop_sequence": "30"
+   },
+   {
+    "trip_id": "UP-N_UN324_V2_AA",
+    "arrival_time": "09:39:00",
+    "departure_time": "09:39:00",
+    "stop_id": "RAVENSWOOD",
+    "stop_sequence": "28"
+   },
+   {
+    "trip_id": "UP-N_UN324_V2_AA",
+    "arrival_time": "09:46:00",
+    "departure_time": "09:46:00",
+    "stop_id": "CLYBOURN",
+    "stop_sequence": "29"
+   },
+   {
+    "trip_id": "UP-N_UN324_V2_AA",
+    "arrival_time": "09:57:00",
+    "departure_time": "09:57:00",
+    "stop_id": "OTC",
+    "stop_sequence": "30"
+   }
+  ]
+ }
+}

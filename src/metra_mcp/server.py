@@ -83,6 +83,21 @@ async def get_gtfs() -> GTFSData:
     return _gtfs
 
 
+async def _gtfs_for_realtime() -> GTFSData | None:
+    """The static schedule for reconciling realtime predictions, or None.
+
+    Realtime tools must keep working when the schedule can't be loaded; they
+    then pass the feed through without computed delays or sanity checks.
+    """
+    gtfs = await get_gtfs()
+    try:
+        await gtfs.ensure_loaded()
+    except Exception as e:
+        logger.warning("Static schedule unavailable for realtime tools: %s", type(e).__name__)
+        return None
+    return gtfs
+
+
 def format_response(data: Any) -> str:
     # Compact: this text is a fallback copy of structuredContent for clients
     # that don't read structured output, so every byte here is sent twice.
@@ -232,7 +247,7 @@ async def _build_board() -> dict:
     client = await get_rt_client()
     positions, updates, alerts = await asyncio.gather(
         client.get_positions(),
-        client.get_trip_updates(),
+        client.get_trip_updates(gtfs=await _gtfs_for_realtime()),
         client.get_alerts(),
     )
     active: dict[str, int] = {}
@@ -247,7 +262,7 @@ async def _build_board() -> dict:
         if not rid or rid in delayed:
             continue
         for stu in upd.get("stop_time_updates", []):
-            delay = stu.get("arrival_delay", 0) or stu.get("departure_delay", 0) or 0
+            delay = stu.get("arrival_delay") or stu.get("departure_delay") or 0
             if delay > _BOARD_DELAY_SEC:
                 delayed.add(rid)
                 break
@@ -545,7 +560,18 @@ _TOOL_DEFS: list[Tool] = [
     ),
     Tool(
         name="get_trip_updates",
-        description="Get real-time arrival/departure predictions for Metra trains.",
+        description=(
+            "Get real-time arrival/departure predictions for Metra trains. Each stop "
+            "carries arrival_time/departure_time, the scheduled time, and a delay in "
+            "seconds computed against the schedule (null when unknown, never an "
+            "assumed 0). prediction_source says where the time came from: "
+            "'feed_time' (Metra's prediction), 'feed_delay' (schedule + Metra's "
+            "delay), 'derived' (Metra's prediction was implausible, so this is the "
+            "previous stop's prediction plus scheduled running time; suspect=true "
+            "and the original is in feed_arrival_time) or 'scheduled' (no realtime "
+            "data for the stop). direction_id follows Metra's convention: '1' "
+            "inbound, '0' outbound; 'direction' spells it out."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -810,7 +836,9 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
 
     elif name == "get_trip_updates":
         client = await get_rt_client()
-        updates = await client.get_trip_updates(args.get("route_id"), args.get("trip_id"))
+        updates = await client.get_trip_updates(
+            args.get("route_id"), args.get("trip_id"), await _gtfs_for_realtime()
+        )
         total = len(updates)
         limit = _clamp_int(args.get("limit"), default=50, lo=1, hi=500)
         updates = updates[:limit]
@@ -843,17 +871,19 @@ async def _dispatch(name: str, args: dict[str, Any]) -> CallToolResult:
         # Three independent realtime feeds — fetch concurrently.
         positions, updates, alerts_data = await asyncio.gather(
             client.get_positions(route_id),
-            client.get_trip_updates(route_id),
+            client.get_trip_updates(route_id, gtfs=await _gtfs_for_realtime()),
             client.get_alerts(route_id),
         )
         delayed_trips = []
         for u in updates:
             max_delay = 0
             for stu in u.get("stop_time_updates", []):
-                delay = stu.get("arrival_delay", 0) or stu.get("departure_delay", 0)
+                delay = stu.get("arrival_delay") or stu.get("departure_delay") or 0
                 if abs(delay) > abs(max_delay):
                     max_delay = delay
-            if max_delay != 0:
+            # Delays are now measured against the schedule, so nearly every
+            # train is a few seconds off; report the ones the board would.
+            if abs(max_delay) > _BOARD_DELAY_SEC:
                 delayed_trips.append(
                     {
                         "trip_id": u["trip_id"],

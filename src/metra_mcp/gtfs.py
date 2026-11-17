@@ -410,6 +410,37 @@ class GTFSData:
                     active.discard(cd["service_id"])
         return active
 
+    def find_trip(
+        self,
+        trip_id: str,
+        route_id: str | None = None,
+        service_date: date | None = None,
+    ) -> dict[str, str] | None:
+        """Static trips.txt row for a realtime trip, or None.
+
+        Joins on trip_id. If the realtime feed uses an id the schedule does
+        not have (Metra is changing the trip_id format), fall back to the one
+        trip on that route with the same train number running that day; an
+        ambiguous match returns None rather than a guess.
+        """
+        trip = self._trip_by_id.get(trip_id)
+        if trip is not None or not route_id:
+            return trip
+        number = train_number(trip_id)
+        if number is None:
+            return None
+        services = self.get_active_service_ids(service_date)
+        matches = [
+            t
+            for t in self._trips_by_route.get(route_id, [])
+            if t.get("service_id") in services and train_number(t["trip_id"]) == number
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def get_trip_stop_times(self, trip_id: str) -> list[dict[str, str]]:
+        """Static stop_times rows for a trip, ordered by stop_sequence."""
+        return self._stop_times_by_trip.get(trip_id, [])
+
     def get_schedule(
         self,
         route_id: str,

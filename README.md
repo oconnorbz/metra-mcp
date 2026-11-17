@@ -208,6 +208,38 @@ stylesheet and font files, which cannot execute script.
 - **Realtime feeds** — `gtfspublic.metrarr.com` (positions, trip updates, alerts)
 - **Static schedule** — `schedules.metrarail.com/gtfs/schedule.zip` (cached daily)
 
+### Realtime predictions are checked against the schedule
+
+Metra's TripUpdates feed sometimes publishes a wrong arrival time for a trip's
+last stop while that stop is still several stops away. On 2026-11-17, inbound
+UP-N trains showed Chicago OTC about 70 minutes after Clybourn (scheduled: 11),
+an hour off; the same stop was predicted correctly once it was the train's next
+stop. The epoch in the feed is wrong; this server does no timezone arithmetic
+on it.
+
+`get_trip_updates` therefore reconciles every stop with the static schedule
+(`src/metra_mcp/predictions.py`):
+
+- `arrival_delay` / `departure_delay` are computed here (predicted − scheduled)
+  and are `null` when there is nothing to compute them from, never an assumed 0.
+- A prediction more than 45 minutes off schedule whose running time from the
+  previous stop is also more than 30 minutes off schedule is marked
+  `"suspect": true` and replaced by the previous stop's prediction plus the
+  scheduled running time (`"prediction_source": "derived"`). The feed's value
+  is kept in `feed_arrival_time`. A train that is simply late at every stop is
+  not flagged.
+- `prediction_source` is `feed_time`, `feed_delay`, `derived` or `scheduled`.
+- `direction_id` / `direction` come from `trips.txt` when the feed omits them
+  (Metra: `1` = inbound, `0` = outbound).
+
+Smaller inflations of the last stop (10–30 minutes) also occur and are passed
+through unflagged.
+
+Scheduled times are anchored at "noon minus 12h" in `America/Chicago` on the
+service date, per the GTFS spec, so DST-change days and `24:xx:xx` times work.
+
+Tests: `pip install -e '.[dev]' && pytest`.
+
 This project is not affiliated with Metra.
 
 ## License
